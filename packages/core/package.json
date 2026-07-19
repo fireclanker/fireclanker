@@ -1,8 +1,19 @@
 {
   "name": "@fireclanker/core",
-  "module": "index.ts",
+  "module": "src/index.ts",
+  "exports": {
+    ".": "./src/index.ts"
+  },
   "type": "module",
   "private": true,
+  "scripts": {
+    "test": "bun test",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@aws-sdk/client-dynamodb": "^3.850.0",
+    "effect": "catalog:"
+  },
   "devDependencies": {
     "@types/bun": "latest"
   },
