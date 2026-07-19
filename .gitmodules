@@ -1,0 +1,9 @@
+[submodule ".agents/references/effect-smol"]
+	path = .agents/references/effect-smol
+	url = git@github.com:Effect-TS/effect-smol.git
+[submodule ".agents/references/opencode"]
+	path = .agents/references/opencode
+	url = git@github.com:anomalyco/opencode.git
+[submodule ".agents/references/alchemy"]
+	path = .agents/references/alchemy
+	url = git@github.com:alchemy-run/alchemy.git

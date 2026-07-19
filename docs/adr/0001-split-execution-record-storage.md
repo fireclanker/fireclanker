@@ -1,0 +1,3 @@
+# Split execution records between DynamoDB and S3
+
+The canonical complete Execution Record for a succeeded run is a versioned S3 archive of its entire isolated OpenCode data directory after clean shutdown, including its SQLite database and full tool-output side files; failed runs may have a partial archive or none after abrupt termination. DynamoDB stores the ordered, bounded Agent Run Events needed by `--watch`. Keeping both stores complete would duplicate potentially oversized tool data and risk DynamoDB's item-size limit; using only live events would lose data because OpenCode events have no replay guarantee and truncated outputs live in side files.
