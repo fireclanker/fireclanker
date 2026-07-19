@@ -6,6 +6,9 @@ import { Command } from "effect/unstable/cli"
 import { deploy } from "./command/deploy/index.ts"
 import { run } from "./command/run/index.ts"
 
+process.env.AWS_REGION = "us-east-1"
+process.env.AWS_DEFAULT_REGION = "us-east-1"
+
 const cli = Command.make("fireclanker").pipe(
   Command.withSubcommands([deploy, run])
 )
