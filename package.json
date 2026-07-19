@@ -3,9 +3,18 @@
   "module": "index.ts",
   "type": "module",
   "private": true,
-  "workspaces": [
-    "packages/*"
-  ],
+  "workspaces": {
+    "packages": [
+      "packages/*"
+    ],
+    "catalog": {
+      "@effect/platform-bun": "4.0.0-beta.99",
+      "effect": "4.0.0-beta.99"
+    }
+  },
+  "scripts": {
+    "cli": "bun run --filter @fireclanker/cli start"
+  },
   "devDependencies": {
     "@types/bun": "latest"
   },

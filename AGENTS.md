@@ -11,3 +11,11 @@ Triage uses the canonical `needs-triage`, `needs-info`, `ready-for-agent`, `read
 ### Domain docs
 
 Domain documentation uses the single-context layout. See `docs/agents/domain.md`.
+
+### References
+
+Feel free to explore these references in read-only mode:
+
+- `alchemy` -> `.agents/references/alchemy/`
+- `effect` -> `.agents/references/effect-smol/`
+- `opencode` -> `.agents/references/opencode/`
