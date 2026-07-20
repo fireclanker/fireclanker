@@ -8,6 +8,8 @@ import TableEventsStreamLive, {
   TableEventsQueue,
   TableEventsStream
 } from "./table.ts"
+import AgentMicrovmLive from "./agent-microvm.ts"
+import QueueWorker from "./queue-worker.ts"
 
 export default Alchemy.Stack(
   "fireclanker",
@@ -23,6 +25,7 @@ export default Alchemy.Stack(
     const table = yield* FireclankerTable
     const tableEventsQueue = yield* TableEventsQueue
     yield* TableEventsStream.pipe(Effect.provide(TableEventsStreamLive))
+    yield* QueueWorker
 
     return {
       executionRecordsBucket: executionRecords.bucketName,
@@ -38,5 +41,5 @@ export default Alchemy.Stack(
         )
       )
     }
-  })
+  }).pipe(Effect.provide(AgentMicrovmLive))
 )

@@ -1,27 +1,21 @@
-import { AgentJob } from "@fireclanker/core"
-import { Console, Effect, Layer } from "effect"
-import { Argument, Command } from "effect/unstable/cli"
-import { TABLE_NAME } from "../../infra/constants.ts"
+import { Effect } from "effect"
+import { Argument, Command, Flag } from "effect/unstable/cli"
+import * as Infra from "../../infra"
 
 const prompt = Argument.string("prompt").pipe(
   Argument.withDescription("Prompt for the agent job")
 )
 
-const queueJob = Effect.fn("RunCommand.queueJob")(function*(prompt: string) {
-  const agentJobLayer = AgentJob.AgentJobServiceLive.pipe(
-    Layer.provide(AgentJob.DynamoAgentJobRepository({ tableName: TABLE_NAME }))
-  )
+const watch = Flag.boolean("watch").pipe(
+  Flag.withDescription("Stream persisted job output until completion")
+)
 
-  return yield* AgentJob.AgentJobService.pipe(
-    Effect.flatMap((service) => service.queueJob(prompt)),
-    Effect.provide(agentJobLayer)
-  )
-})
-
-export const run = Command.make("run", { prompt }, ({ prompt }) =>
-  queueJob(prompt).pipe(
-    Effect.tap((job) => Console.log(job.id))
-  )
-).pipe(
+/**
+  * @since 0.0.0
+  * @category command
+  */
+export const run = Command.make("run", { prompt, watch }, Effect.fn(function*({ prompt, watch }) {
+  yield* Infra.run(prompt, watch)
+})).pipe(
   Command.withDescription("Queue an agent job")
 )

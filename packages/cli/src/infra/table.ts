@@ -1,6 +1,6 @@
 import * as AWS from "alchemy/AWS"
 import * as RemovalPolicy from "alchemy/RemovalPolicy"
-import { Context, Effect, Layer, Stream } from "effect"
+import { Context, Effect, Layer, Result, Stream } from "effect"
 import { TABLE_NAME } from "./constants.ts"
 
 /**
@@ -58,7 +58,25 @@ export const FireclankerTable = Effect.gen(function*() {
   }).pipe(RemovalPolicy.retain())
 })
 
-export const TableEventsQueue = AWS.SQS.Queue("TableEventsQueue")
+export const TableEventsQueue = AWS.SQS.Queue("TableEventsQueue", {
+  visibilityTimeout: 360
+})
+
+const queuedJobId = (record: {
+  readonly eventName?: string
+  readonly dynamodb?: { readonly NewImage?: unknown }
+}) => {
+  if (record.eventName !== "INSERT") return undefined
+  const image = record.dynamodb?.NewImage as
+    | Record<string, { readonly S?: string }>
+    | undefined
+  if (
+    image?.entityType?.S !== "AgentRun" ||
+    image.status?.S !== "queued" ||
+    image.SK?.S !== "RUN"
+  ) return undefined
+  return image.id?.S
+}
 
 class TableResources extends Context.Service<
   TableResources,
@@ -93,11 +111,18 @@ export default TableEventsStream.make(
       {
         streamViewType: "NEW_IMAGE",
         startingPosition: "LATEST",
-        batchSize: 10
+        batchSize: 1
       },
       (records) =>
         records.pipe(
-          Stream.map((record) => JSON.stringify(record)),
+          Stream.filterMap((record) => {
+            const jobId = queuedJobId(record)
+            return jobId === undefined ? Result.fail(undefined) : Result.succeed(jobId)
+          }),
+          Stream.map((jobId) => JSON.stringify({
+            version: 1,
+            jobId
+          })),
           Stream.run(sink),
           Effect.orDie
         )

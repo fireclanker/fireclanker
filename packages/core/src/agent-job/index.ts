@@ -1,6 +1,6 @@
 export * from "./agent-job.model.ts"
 export * from "./error.ts"
-export * from "./repository/agent-job.repository.ts"
+export * from "./service/agent-job.repository.ts"
 export * from "./service/agent-job.service.ts"
 export * from "./layer/agent-job.service.ts"
 export * from "./layer/dynamo-agent-job.repository.ts"
