@@ -63,6 +63,93 @@ describe("AgentJobService.queueJob", () => {
     })
   })
 
+  test("persists the Target Repository binding for a repo-bound run", async () => {
+    const { client, writes } = makeClient()
+    const layer = AgentJobServiceLive.pipe(
+      Layer.provide(DynamoAgentJobRepository({ tableName: "fireclanker", client }))
+    )
+    const job = await Effect.runPromise(
+      Effect.gen(function*() {
+        const agentJob = yield* AgentJobService
+        return yield* agentJob.queueJob("fix the flaky login test", "owner/name")
+      }).pipe(
+        Effect.provide(layer)
+      )
+    )
+
+    expect(job.status).toBe("queued")
+    expect(String(job.targetRepository)).toBe("owner/name")
+    expect(writes).toHaveLength(1)
+    expect(writes[0]).toEqual({
+      TableName: "fireclanker",
+      Item: {
+        PK: { S: `RUN#${job.id}` },
+        SK: { S: "RUN" },
+        entityType: { S: "AgentRun" },
+        id: { S: job.id },
+        prompt: { S: job.prompt },
+        status: { S: "queued" },
+        createdAt: { S: expect.any(String) },
+        createdAtId: { S: expect.stringMatching(new RegExp(`#${job.id}$`)) },
+        targetRepository: { S: "owner/name" }
+      },
+      ConditionExpression: "attribute_not_exists(PK) AND attribute_not_exists(SK)"
+    })
+  })
+
+  test.each([
+    "https://github.com/owner/name",
+    "https://github.com/owner/name.git",
+    "https://github.com/owner/name/"
+  ])("normalizes %s to the owner/name binding", async (input) => {
+    const { client, writes } = makeClient()
+    const layer = AgentJobServiceLive.pipe(
+      Layer.provide(DynamoAgentJobRepository({ tableName: "fireclanker", client }))
+    )
+    const job = await Effect.runPromise(
+      Effect.gen(function*() {
+        const agentJob = yield* AgentJobService
+        return yield* agentJob.queueJob("fix the flaky login test", input)
+      }).pipe(
+        Effect.provide(layer)
+      )
+    )
+
+    expect(String(job.targetRepository)).toBe("owner/name")
+    expect(writes).toHaveLength(1)
+    expect(writes[0]?.Item?.targetRepository).toEqual({ S: "owner/name" })
+  })
+
+  test.each([
+    "name",
+    "owner/",
+    "owner//name",
+    "owner/name/extra",
+    "http://github.com/owner/name",
+    "git@github.com:owner/name.git",
+    "https://github.com/owner",
+    "https://gitlab.com/owner/name",
+    "-owner/name",
+    "owner/.",
+    "owner name/repo"
+  ])("rejects malformed Target Repository %s without writing", async (input) => {
+    const { client, writes } = makeClient()
+    const layer = AgentJobServiceLive.pipe(
+      Layer.provide(DynamoAgentJobRepository({ tableName: "fireclanker", client }))
+    )
+    const error = await Effect.runPromise(
+      Effect.gen(function*() {
+        const agentJob = yield* AgentJobService
+        return yield* agentJob.queueJob("fix the flaky login test", input).pipe(Effect.flip)
+      }).pipe(
+        Effect.provide(layer)
+      )
+    )
+
+    expect(error._tag).toBe("InvalidTargetRepository")
+    expect(writes).toHaveLength(0)
+  })
+
   test("rejects a whitespace-only prompt without writing", async () => {
     const { client, writes } = makeClient()
     const layer = AgentJobServiceLive.pipe(
@@ -139,6 +226,48 @@ describe("AgentJob lifecycle", () => {
     )
 
     expect(claims).toEqual([true, false])
+  })
+
+  test("decodes the Target Repository binding through get", async () => {
+    const boundId = crypto.randomUUID()
+    const plainId = crypto.randomUUID()
+    const now = "2026-07-19T12:00:00.000Z"
+    const queuedItem = (id: string) => ({
+      PK: { S: `RUN#${id}` },
+      SK: { S: "RUN" },
+      id: { S: id },
+      prompt: { S: "hello" },
+      status: { S: "queued" },
+      createdAt: { S: now }
+    })
+    const client: AgentJobDynamoClient = {
+      send: async (command) => {
+        expect(command).toBeInstanceOf(GetItemCommand)
+        if (!(command instanceof GetItemCommand)) throw new Error("unexpected command")
+        return command.input.Key?.PK?.S === `RUN#${boundId}`
+          ? {
+            $metadata: {},
+            Item: { ...queuedItem(boundId), targetRepository: { S: "owner/name" } }
+          }
+          : { $metadata: {}, Item: queuedItem(plainId) }
+      }
+    }
+    const layer = AgentJobServiceLive.pipe(
+      Layer.provide(DynamoAgentJobRepository({ tableName: "fireclanker", client }))
+    )
+
+    const result = await Effect.runPromise(
+      Effect.gen(function*() {
+        const service = yield* AgentJobService
+        return {
+          bound: yield* service.get(Schema.decodeUnknownSync(AgentJobId)(boundId)),
+          plain: yield* service.get(Schema.decodeUnknownSync(AgentJobId)(plainId))
+        }
+      }).pipe(Effect.provide(layer), Effect.scoped)
+    )
+
+    expect(String(result.bound.targetRepository)).toBe("owner/name")
+    expect(result.plain.targetRepository).toBeUndefined()
   })
 
   test("decodes terminal jobs and ordered events", async () => {

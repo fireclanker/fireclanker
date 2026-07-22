@@ -20,6 +20,10 @@ _Avoid_: Query, message, task
 An Agent Prompt assumed not to intentionally misuse the coding agent's runtime permissions. Compute isolation does not make a hostile prompt trusted.
 _Avoid_: Safe prompt, sandboxed prompt
 
+**Target Repository**:
+The single GitHub repository bound to an Agent Run at request time, cloned into its Run Workspace by the worker. An Agent Run has at most one, and repository content is never a Trusted Prompt.
+_Avoid_: Repo, project, checkout
+
 **Queued**:
 The Agent Run has been durably accepted and is eligible for a worker to claim. It does not guarantee that execution will eventually begin.
 _Avoid_: Scheduled, guaranteed
@@ -29,7 +33,7 @@ The Agent Run has been exclusively claimed by one worker for execution. It does 
 _Avoid_: Live, healthy
 
 **Succeeded**:
-The Agent Run completed, produced a textual response, and durably preserved its complete Execution Record and every Agent Run Event observed during execution. It does not assert that the response correctly fulfilled the prompt.
+The Agent Run completed, produced a textual response, and durably preserved its complete Execution Record and every Agent Run Event observed during execution. It does not assert that the response correctly fulfilled the prompt. For an Agent Run bound to a Target Repository, it additionally requires the publish step to have completed: a Publication was recorded, or the run legitimately had nothing to publish.
 _Avoid_: Correct, fulfilled
 
 **Failed**:

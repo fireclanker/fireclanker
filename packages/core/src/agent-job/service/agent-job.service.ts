@@ -8,6 +8,7 @@ import {
   AgentJobNotFound,
   AgentJobOperationError,
   InvalidAgentPrompt,
+  InvalidTargetRepository,
   QueueJobError
 } from "../error.ts"
 
@@ -21,8 +22,9 @@ export interface IAgentJobService {
     * @category service interface method
     */
   readonly queueJob: (
-    prompt: string
-  ) => Effect.Effect<AgentJob, InvalidAgentPrompt | QueueJobError>
+    prompt: string,
+    targetRepository?: string
+  ) => Effect.Effect<AgentJob, InvalidAgentPrompt | InvalidTargetRepository | QueueJobError>
 
   /**
     * @since

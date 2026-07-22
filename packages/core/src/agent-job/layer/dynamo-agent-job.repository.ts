@@ -55,6 +55,7 @@ const decodeJob = (item: Record<string, AttributeValue>) => {
   const common = {
     id: stringAttribute(item, "id"),
     prompt: stringAttribute(item, "prompt"),
+    targetRepository: stringAttribute(item, "targetRepository"),
     status,
     createdAt: stringAttribute(item, "createdAt")
   }
@@ -130,6 +131,9 @@ export const DynamoAgentJobRepository = ({
             entityType: { S: "AgentRun" },
             id: { S: job.id },
             prompt: { S: job.prompt },
+            ...(job.targetRepository === undefined
+              ? {}
+              : { targetRepository: { S: job.targetRepository } }),
             status: { S: job.status },
             createdAt: { S: createdAtIso },
             createdAtId: { S: `${createdAtIso}#${job.id}` }

@@ -13,6 +13,15 @@ export class InvalidAgentPrompt extends Schema.TaggedErrorClass<InvalidAgentProm
   * @since
   * @category error
   */
+export class InvalidTargetRepository extends Schema.TaggedErrorClass<InvalidTargetRepository>()(
+  "InvalidTargetRepository",
+  { cause: Schema.Defect() }
+) { }
+
+/**
+  * @since
+  * @category error
+  */
 export class QueueJobError extends Schema.TaggedErrorClass<QueueJobError>()(
   "QueueJobError",
   { cause: Schema.Defect() }
