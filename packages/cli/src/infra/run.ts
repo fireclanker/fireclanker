@@ -1,15 +1,16 @@
 import { AgentJob } from "@fireclanker/core"
 import { Console, Effect, Layer } from "effect"
+import { readConfig } from "../config.ts"
 import { configureAwsSdk } from "./aws-sdk.ts"
-import { TABLE_NAME } from "./constants.ts"
 import { AlchemyServices } from "./services.ts"
 
 export const run = Effect.fn("Infrastructure.run")(
   function*(prompt: string, watch: boolean) {
-    const { clientConfig } = yield* configureAwsSdk
+    const config = yield* readConfig
+    const { clientConfig } = yield* configureAwsSdk(config)
     const agentJobLayer = AgentJob.AgentJobServiceLive.pipe(
       Layer.provide(AgentJob.DynamoAgentJobRepository({
-        tableName: TABLE_NAME,
+        tableName: config.name,
         clientConfig
       }))
     )

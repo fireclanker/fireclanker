@@ -9,10 +9,11 @@ import TableEventsStreamLive, {
   TableEventsStream
 } from "./table.ts"
 import AgentMicrovmLive from "./agent-microvm.ts"
+import { DEPLOYMENT_NAME } from "./constants.ts"
 import QueueWorker from "./queue-worker.ts"
 
 export default Alchemy.Stack(
-  "fireclanker",
+  DEPLOYMENT_NAME,
   {
     providers: AWS.providers(),
     state: AWS.state()

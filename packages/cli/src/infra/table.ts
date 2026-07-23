@@ -101,7 +101,10 @@ export class TableEventsStream extends AWS.Lambda.Function<AWS.Lambda.Function>(
 ) {}
 
 export default TableEventsStream.make(
-  { main: import.meta.url },
+  {
+    main: import.meta.url,
+    env: { FIRECLANKER_NAME: TABLE_NAME }
+  },
   Effect.gen(function*() {
     const { table, queue } = yield* TableResources
     const sink = yield* AWS.SQS.QueueSink(queue)

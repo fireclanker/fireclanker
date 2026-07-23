@@ -1,11 +1,12 @@
 import { mkdtemp, mkdir, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
+import { fromNodeProviderChain } from "@aws-sdk/credential-providers"
 import { Effect } from "effect"
+import { bedrockModel, bedrockOpencodeConfig } from "./bedrock.ts"
 import { makeOpenCode, OpenCodeError, type OpenCodePart } from "./effect-sdk.ts"
-import { mockModel, mockOpencodeConfig, startMockLlm } from "./mock-llm.ts"
 
-export const runOpencodeWithMock = Effect.fn("OpenCode.runWithMock")(
+export const runOpencode = Effect.fn("OpenCode.run")(
   function*(prompt: string) {
     const root = yield* Effect.acquireRelease(
       Effect.tryPromise({
@@ -27,34 +28,45 @@ export const runOpencodeWithMock = Effect.fn("OpenCode.runWithMock")(
       try: () => mkdir(workspace),
       catch: (cause) => new OpenCodeError({ operation: "create-workspace", cause })
     })
-    const llm = yield* Effect.acquireRelease(
-      Effect.tryPromise({
-        try: () => startMockLlm(`mock response: ${prompt}`),
-        catch: (cause) => new OpenCodeError({ operation: "start-mock-llm", cause })
-      }),
-      (llm) => Effect.tryPromise({
-        try: () => llm.close(),
-        catch: (cause) => new OpenCodeError({ operation: "stop-mock-llm", cause })
-      }).pipe(
-        Effect.catchCause((cause) => Effect.logWarning("Unable to stop mock LLM", cause))
-      )
-    )
+    const credentials = yield* Effect.tryPromise({
+      try: () => fromNodeProviderChain()(),
+      catch: (cause) => new OpenCodeError({ operation: "resolve-aws-credentials", cause })
+    })
+    const previousCredentials = {
+      accessKeyId: process.env.AWS_ACCESS_KEY_ID,
+      secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY,
+      sessionToken: process.env.AWS_SESSION_TOKEN
+    }
+    yield* Effect.sync(() => {
+      process.env.AWS_ACCESS_KEY_ID = credentials.accessKeyId
+      process.env.AWS_SECRET_ACCESS_KEY = credentials.secretAccessKey
+      if (credentials.sessionToken) process.env.AWS_SESSION_TOKEN = credentials.sessionToken
+      else delete process.env.AWS_SESSION_TOKEN
+    })
     const opencode = yield* makeOpenCode({
       hostname: "127.0.0.1",
       port: 0,
       timeout: 30_000,
-      config: mockOpencodeConfig(llm.baseURL)
-    })
+      config: bedrockOpencodeConfig(
+        process.env.AWS_REGION ?? process.env.AWS_DEFAULT_REGION ?? "us-east-1"
+      )
+    }).pipe(
+      Effect.ensuring(Effect.sync(() => {
+        restoreEnvironment("AWS_ACCESS_KEY_ID", previousCredentials.accessKeyId)
+        restoreEnvironment("AWS_SECRET_ACCESS_KEY", previousCredentials.secretAccessKey)
+        restoreEnvironment("AWS_SESSION_TOKEN", previousCredentials.sessionToken)
+      }))
+    )
 
     const session = yield* opencode.session.create({
       directory: workspace,
-      title: "Fireclanker mock run",
-      model: { providerID: mockModel.providerID, id: mockModel.modelID }
+      title: "Fireclanker run",
+      model: { providerID: bedrockModel.providerID, id: bedrockModel.modelID }
     })
     const response = yield* opencode.session.prompt({
       sessionID: session.id,
       directory: workspace,
-      model: mockModel,
+      model: bedrockModel,
       parts: [{ type: "text", text: prompt }]
     })
     const result = response.parts
@@ -64,6 +76,12 @@ export const runOpencodeWithMock = Effect.fn("OpenCode.runWithMock")(
       .map((part) => part.text)
       .join("\n")
 
+    if (response.info.error) {
+      return yield* Effect.fail(new OpenCodeError({
+        operation: "prompt-response",
+        cause: response.info.error
+      }))
+    }
     if (!result.trim()) {
       return yield* Effect.fail(new OpenCodeError({
         operation: "read-prompt-response",
@@ -72,6 +90,10 @@ export const runOpencodeWithMock = Effect.fn("OpenCode.runWithMock")(
     }
     return result
   },
-  Effect.scoped,
-  Effect.timeout("180 seconds")
+  Effect.scoped
 )
+
+const restoreEnvironment = (key: string, value: string | undefined): void => {
+  if (value === undefined) delete process.env[key]
+  else process.env[key] = value
+}

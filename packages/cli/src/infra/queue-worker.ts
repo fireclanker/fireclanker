@@ -2,7 +2,7 @@ import { AgentJob } from "@fireclanker/core"
 import * as AWS from "alchemy/AWS"
 import { Duration, Effect, Layer, Schedule, Schema, Stream } from "effect"
 import * as FetchHttpClient from "effect/unstable/http/FetchHttpClient"
-import { AgentMicrovm } from "./agent-microvm.ts"
+import { AgentMicrovm, AgentMicrovmExecutionRole } from "./agent-microvm.ts"
 import { TABLE_NAME } from "./constants.ts"
 import { FireclankerTable, TableEventsQueue } from "./table.ts"
 
@@ -21,11 +21,14 @@ export class QueueWorker extends AWS.Lambda.Function<QueueWorker>()(
     main: import.meta.filename,
     architecture: "arm64",
     timeout: Duration.minutes(5),
-    memorySize: 1024
+    memorySize: 1024,
+    env: { FIRECLANKER_NAME: TABLE_NAME }
   },
   Effect.gen(function*() {
     const table = yield* FireclankerTable
     const queue = yield* TableEventsQueue
+    const executionRole = yield* AgentMicrovmExecutionRole
+    const executionRoleArn = yield* executionRole.roleArn
     const host = yield* AWS.Lambda.Function
     const runMicrovm = yield* AWS.Lambda.RunMicrovm(AgentMicrovm)
     const getMicrovm = yield* AWS.Lambda.GetMicrovm(AgentMicrovm)
@@ -43,6 +46,13 @@ export class QueueWorker extends AWS.Lambda.Function<QueueWorker>()(
             "dynamodb:UpdateItem"
           ],
           Resource: [table.tableArn]
+        }]
+      })
+      yield* host.bind`Allow(${host}, PassRole(${executionRole}))`({
+        policyStatements: [{
+          Effect: "Allow",
+          Action: ["iam:PassRole"],
+          Resource: [executionRole.roleArn]
         }]
       })
     }
@@ -69,7 +79,10 @@ export class QueueWorker extends AWS.Lambda.Function<QueueWorker>()(
         const job = yield* service.get(id)
         yield* append("[lambda] worker claimed job")
         yield* append("[lambda] starting agent microvm")
-        const vm = yield* runMicrovm({ maximumDurationInSeconds: 240 })
+        const vm = yield* runMicrovm({
+          executionRoleArn: yield* executionRoleArn,
+          maximumDurationInSeconds: 240
+        })
 
         const response = yield* Effect.gen(function*() {
           yield* getMicrovm({ microvmIdentifier: vm.microvmId }).pipe(

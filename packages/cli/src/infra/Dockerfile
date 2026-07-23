@@ -2,6 +2,7 @@ FROM public.ecr.aws/lambda/microvms:al2023-minimal
 
 RUN dnf install -y nodejs npm \
  && npm install --prefix /opt/opencode --force --os=linux --cpu=arm64 --libc=glibc --omit=dev --ignore-scripts opencode-linux-arm64@1.18.3 \
+ && npm install --prefix /app --omit=dev --ignore-scripts @aws-sdk/credential-providers@3.1090.0 \
  && chmod 0755 /opt/opencode/node_modules/opencode-linux-arm64/bin/opencode \
  && ln -s /opt/opencode/node_modules/opencode-linux-arm64/bin/opencode /usr/local/bin/opencode \
  && dnf clean all

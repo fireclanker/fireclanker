@@ -29,7 +29,8 @@ The application uses `~/.config/fireclanker/config.json`:
 ```json
 {
   "name": "fireclanker",
-  "region": "us-east-1"
+  "region": "us-east-1",
+  "awsProfile": "sandbox-us"
 }
 ```
 
@@ -37,31 +38,33 @@ The file contains only:
 
 - `name`: the deployment name and prefix used for AWS resources.
 - `region`: the AWS region containing the deployment.
+- `awsProfile`: the profile in `~/.aws/config` used for AWS credentials.
 
-AWS credentials are not stored in this file. They come from the active AWS credential chain.
+AWS credentials are not stored in this file. The AWS SDK resolves them from the configured profile.
 
-Deploy with:
-
-```sh
-assume sandbox --exec -- fireclanker deploy
-```
-
-`deploy` is the only command that can run without the configuration file. When the file is absent, `name` defaults to `fireclanker` and `region` comes from the active AWS configuration. The command accepts `--name` and `--region` to override file or default values.
+Initialize Fireclanker before using any other command:
 
 ```sh
-assume sandbox --exec -- fireclanker deploy --name fireclanker --region us-east-1
+fireclanker init
 ```
 
-After deployment succeeds, `deploy` writes the effective `name` and `region` to the configuration file. A failed deployment does not replace an existing configuration. The active AWS account, effective region, and deployment name identify a deployment; deploying the same tuple again updates that deployment.
+`init` interactively asks for all three settings and writes the configuration file. All other commands require this file and fail with setup instructions when it is absent.
 
-All other commands use the configured `name` and `region`, together with the active AWS credential chain, to locate the deployed DynamoDB table and related resources.
+For an SSO profile, authenticate it before deploying:
+
+```sh
+aws sso login --profile sandbox-us
+fireclanker deploy
+```
+
+The configured AWS account, region, and deployment name identify a deployment; deploying the same tuple again updates that deployment. Commands use the configured `name`, `region`, and `awsProfile` to locate it.
 
 ## CLI
 
 ### Submit a run
 
 ```sh
-assume sandbox --exec -- fireclanker run "hi"
+fireclanker run "hi"
 ```
 
 `run` accepts a prompt, creates a queued Agent Run in DynamoDB, and returns immediately after printing its ID. It does not accept `--repo` or `--repos`.
@@ -69,7 +72,7 @@ assume sandbox --exec -- fireclanker run "hi"
 ### Submit and watch a run
 
 ```sh
-assume sandbox --exec -- fireclanker run --watch "hi"
+fireclanker run --watch "hi"
 ```
 
 `--watch` creates the same queued Agent Run, prints its ID, then polls its persisted events and prints new OpenCode events until the run succeeds or fails. After observing a terminal state, it drains all remaining events before printing the final result or failure description. It exits non-zero when the Agent Run fails.
@@ -83,7 +86,7 @@ Watch mode has no client-side timeout. If a run is stranded in `queued` or `runn
 ### List runs
 
 ```sh
-assume sandbox --exec -- fireclanker list
+fireclanker list
 ```
 
 `list` prints all Agent Runs in the configured deployment, transparently traversing storage pages. Runs appear in deterministic reverse creation order, with equal creation times ordered by Agent Run ID. It prints at least:
@@ -97,7 +100,7 @@ assume sandbox --exec -- fireclanker list
 ### Get a run
 
 ```sh
-assume sandbox --exec -- fireclanker get <agent-run-id>
+fireclanker get <agent-run-id>
 ```
 
 `get` prints the current state of an Agent Run. For a succeeded run it also prints the textual response; for a failed run it prints the failure description. Retrieving a failed run still exits zero because the read succeeded. Missing IDs and read failures exit non-zero.

@@ -6,10 +6,18 @@ Install dependencies from the workspace root:
 bun install
 ```
 
-Run the CLI:
+Initialize the CLI and answer the prompts for deployment name, AWS region, and AWS profile:
 
 ```bash
-bun run cli hello
+bun run src/index.ts init
 ```
 
-The `hello` command uses Effect's beta CLI API and prints `Hello from Fireclanker!`.
+Authenticate SSO profiles before deploying:
+
+```bash
+aws sso login --profile <profile>
+bun run src/index.ts deploy
+```
+
+`deploy`, `destroy`, and `run` require the configuration written by `init` at
+`~/.config/fireclanker/config.json`.

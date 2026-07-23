@@ -15,6 +15,10 @@ export type OpenCodePart = {
   readonly ignored?: boolean
 }
 
+export type OpenCodeAssistantMessage = {
+  readonly error?: unknown
+}
+
 export type OpenCodeSessionCreateInput = {
   readonly directory: string
   readonly title: string
@@ -48,7 +52,10 @@ type OpenCodeSdk = {
       readonly prompt: (
         parameters: OpenCodeSessionPromptInput,
         options: { readonly throwOnError: true; readonly signal: AbortSignal }
-      ) => Promise<{ readonly data: { readonly parts: ReadonlyArray<OpenCodePart> } }>
+      ) => Promise<{ readonly data: {
+        readonly info: OpenCodeAssistantMessage
+        readonly parts: ReadonlyArray<OpenCodePart>
+      } }>
     }
   }
 }
@@ -69,6 +76,7 @@ export type OpenCode = {
     readonly prompt: (
       input: OpenCodeSessionPromptInput
     ) => Effect.Effect<{
+      readonly info: OpenCodeAssistantMessage
       readonly parts: ReadonlyArray<OpenCodePart>
     }, OpenCodeError>
   }
