@@ -1,4 +1,3 @@
-import { AgentJob } from "@fireclanker/core"
 import { NodeServices } from "@effect/platform-node"
 import { expect, test } from "bun:test"
 import { Effect, Layer, Schema, Sink, Stream } from "effect"
@@ -6,9 +5,10 @@ import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process"
 import { mkdtemp, readFile, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { clonePublicRepository } from "../src/opencode/clone.ts"
+import { SourceRepository } from "../src/agent-job/agent-job.model.ts"
+import { clonePublicRepository } from "../src/agent-harness/layer/opencode/clone.ts"
 
-const sourceRepository = Schema.decodeUnknownSync(AgentJob.SourceRepository)(
+const sourceRepository = Schema.decodeUnknownSync(SourceRepository)(
   "Fireclanker/example.repo"
 )
 
@@ -90,7 +90,7 @@ test.skipIf(
   const root = await mkdtemp(join(tmpdir(), "fireclanker-clone-test-"))
   try {
     await Effect.runPromise(clonePublicRepository({
-      sourceRepository: Schema.decodeUnknownSync(AgentJob.SourceRepository)(
+      sourceRepository: Schema.decodeUnknownSync(SourceRepository)(
         "octocat/Hello-World"
       ),
       destination: join(root, "workspace")

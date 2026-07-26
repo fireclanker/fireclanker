@@ -3,7 +3,7 @@ import {
   BEDROCK_MODEL_ID,
   bedrockModel,
   bedrockOpencodeConfig
-} from "../src/opencode/bedrock.ts"
+} from "../src/agent-harness/layer/opencode/bedrock.ts"
 
 test("restricts OpenCode to Claude Sonnet 4.6 on Bedrock", () => {
   const config = bedrockOpencodeConfig("eu-west-1")

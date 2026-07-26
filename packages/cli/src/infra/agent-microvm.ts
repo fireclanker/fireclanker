@@ -1,9 +1,6 @@
-import { NodeServices } from "@effect/platform-node"
+import { AgentHarness, type AgentJob } from "@fireclanker/core"
 import * as AWS from "alchemy/AWS"
-import { Effect } from "effect"
-import type { AgentJob } from "@fireclanker/core"
-import { BEDROCK_MODEL_ID } from "../opencode/bedrock.ts"
-import { runOpencode } from "../opencode/run.ts"
+import { Effect, Layer } from "effect"
 import dockerfile from "./Dockerfile?raw" with { type: "text" }
 
 type AgentMicrovmError = {
@@ -45,7 +42,7 @@ export const AgentMicrovmExecutionRole = AWS.IAM.Role("AgentMicrovmExecutionRole
           "bedrock:InvokeModelWithResponseStream"
         ],
         Resource: [
-          `arn:aws:bedrock:*:*:inference-profile/${BEDROCK_MODEL_ID}`,
+          `arn:aws:bedrock:*:*:inference-profile/${AgentHarness.BEDROCK_MODEL_ID}`,
           "arn:aws:bedrock:*::foundation-model/anthropic.claude-sonnet-4-6"
         ]
       }]
@@ -53,7 +50,7 @@ export const AgentMicrovmExecutionRole = AWS.IAM.Role("AgentMicrovmExecutionRole
   }
 })
 
-export default AgentMicrovm.make(
+export const AgentMicrovmLive = AgentMicrovm.make(
   AgentMicrovmBuildRole.pipe(
     Effect.map((buildRole) => ({
       main: import.meta.filename,
@@ -69,22 +66,18 @@ export default AgentMicrovm.make(
     }))
   ),
   Effect.gen(function*() {
+    const agentHarness = yield* AgentHarness.AgentHarness
+
     return {
-      run: ({ prompt, sourceRepository }) => runOpencode({ prompt, sourceRepository }).pipe(
-        Effect.provide(NodeServices.layer),
-        Effect.mapError((cause): AgentMicrovmError => ({
-          _tag: "AgentMicrovmError",
-          operation: cause.operation
-        })),
-        Effect.tap(() => Effect.logInfo("OpenCode execution completed")),
-        Effect.map((result) => ({
-          result,
-          logs: [
-            "[microvm] public Source Repository checkout completed",
-            "[microvm] OpenCode completed with Claude Sonnet 4.6 on Bedrock"
-          ]
-        }))
-      )
+      run: ({ prompt, sourceRepository }: AgentHarness.AgentHarnessRunRequest) =>
+        agentHarness.run({ prompt, sourceRepository }).pipe(
+          Effect.mapError((cause): AgentMicrovmError => ({
+            _tag: "AgentMicrovmError",
+            operation: cause.operation
+          }))
+        )
     }
   })
 )
+
+export default AgentMicrovmLive.pipe(Layer.provide(AgentHarness.OpenCodeAgentHarness))

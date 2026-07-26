@@ -1,12 +1,12 @@
 import { dirname } from "node:path"
-import type { AgentJob } from "@fireclanker/core"
 import { Effect } from "effect"
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process"
+import type { SourceRepository } from "../../../agent-job/agent-job.model.ts"
 import { OpenCodeError } from "./effect-sdk.ts"
 
 export const clonePublicRepository = Effect.fn("OpenCode.clonePublicRepository")(
   function*({ sourceRepository, destination }: {
-    readonly sourceRepository: AgentJob.SourceRepository
+    readonly sourceRepository: SourceRepository
     readonly destination: string
   }) {
     const spawner = yield* ChildProcessSpawner.ChildProcessSpawner

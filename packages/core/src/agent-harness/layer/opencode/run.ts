@@ -3,7 +3,7 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { fromNodeProviderChain } from "@aws-sdk/credential-providers"
 import { Effect } from "effect"
-import type { AgentJob } from "@fireclanker/core"
+import type { SourceRepository } from "../../../agent-job/agent-job.model.ts"
 import { bedrockModel, bedrockOpencodeConfig } from "./bedrock.ts"
 import { clonePublicRepository } from "./clone.ts"
 import { makeOpenCode, OpenCodeError, type OpenCodePart } from "./effect-sdk.ts"
@@ -11,7 +11,7 @@ import { makeOpenCode, OpenCodeError, type OpenCodePart } from "./effect-sdk.ts"
 export const runOpencode = Effect.fn("OpenCode.run")(
   function*({ prompt, sourceRepository }: {
     readonly prompt: string
-    readonly sourceRepository: AgentJob.SourceRepository
+    readonly sourceRepository: SourceRepository
   }) {
     const root = yield* Effect.acquireRelease(
       Effect.tryPromise({

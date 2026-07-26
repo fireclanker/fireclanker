@@ -12,9 +12,7 @@
     "@distilled.cloud/aws": "0.29.1",
     "@effect-aws/client-sts": "^2.0.0-beta.4",
     "@effect/platform-bun": "catalog:",
-    "@effect/platform-node": "catalog:",
     "@fireclanker/core": "workspace:*",
-    "@opencode-ai/sdk": "1.18.3",
     "alchemy": "2.0.0-beta.63",
     "effect": "catalog:"
   },

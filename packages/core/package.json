@@ -12,6 +12,9 @@
   },
   "dependencies": {
     "@aws-sdk/client-dynamodb": "^3.850.0",
+    "@aws-sdk/credential-providers": "^3.1090.0",
+    "@effect/platform-node": "catalog:",
+    "@opencode-ai/sdk": "1.18.3",
     "effect": "catalog:"
   },
   "devDependencies": {
