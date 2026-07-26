@@ -1,10 +1,16 @@
+import { NodeServices } from "@effect/platform-node"
 import { expect, test } from "bun:test"
-import { Effect, Schema } from "effect"
+import { Effect, Layer, Schema } from "effect"
 import { SourceRepository } from "../src/agent-job/agent-job.model.ts"
 import {
   AgentHarness,
   OpenCodeAgentHarness
 } from "../src/agent-harness/index.ts"
+import { GitHubRepository } from "../src/repository/index.ts"
+
+const OpenCodeAgentHarnessLive = OpenCodeAgentHarness.pipe(
+  Layer.provide(GitHubRepository.pipe(Layer.provide(NodeServices.layer)))
+)
 
 test.skipIf(Bun.which("opencode") === null || process.env.FIRECLANKER_OPENCODE_INTEGRATION !== "1")(
   "runs OpenCode with Claude Sonnet 4.6 on Bedrock",
@@ -22,7 +28,7 @@ test.skipIf(Bun.which("opencode") === null || process.env.FIRECLANKER_OPENCODE_I
           "octocat/Hello-World"
         )
       })
-    }).pipe(Effect.provide(OpenCodeAgentHarness)))
+    }).pipe(Effect.provide(OpenCodeAgentHarnessLive)))
     expect(response.result).toContain("hello from fireclanker")
     expect({
       accessKeyId: process.env.AWS_ACCESS_KEY_ID,

@@ -1,5 +1,5 @@
-import { NodeServices } from "@effect/platform-node"
 import { Effect, Layer } from "effect"
+import { Repository } from "../../repository/service/repository.service.ts"
 import { AgentHarnessError } from "../error.ts"
 import {
   AgentHarness,
@@ -16,9 +16,10 @@ export { BEDROCK_MODEL_ID } from "./opencode/bedrock.ts"
 export const OpenCodeAgentHarness = Layer.effect(
   AgentHarness,
   Effect.gen(function*() {
+    const repository = yield* Repository
     const run: IAgentHarness["run"] = Effect.fn("OpenCodeAgentHarness.run")(
       (request) => runOpencode(request).pipe(
-        Effect.provide(NodeServices.layer),
+        Effect.provideService(Repository, repository),
         Effect.mapError((error) => new AgentHarnessError({
           operation: error.operation,
           cause: error.cause

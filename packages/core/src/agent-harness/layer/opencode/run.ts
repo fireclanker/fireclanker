@@ -4,8 +4,8 @@ import { join } from "node:path"
 import { fromNodeProviderChain } from "@aws-sdk/credential-providers"
 import { Effect } from "effect"
 import type { SourceRepository } from "../../../agent-job/agent-job.model.ts"
+import { Repository } from "../../../repository/service/repository.service.ts"
 import { bedrockModel, bedrockOpencodeConfig } from "./bedrock.ts"
-import { clonePublicRepository } from "./clone.ts"
 import { makeOpenCode, OpenCodeError, type OpenCodePart } from "./effect-sdk.ts"
 
 export const runOpencode = Effect.fn("OpenCode.run")(
@@ -13,6 +13,7 @@ export const runOpencode = Effect.fn("OpenCode.run")(
     readonly prompt: string
     readonly sourceRepository: SourceRepository
   }) {
+    const repository = yield* Repository
     const root = yield* Effect.acquireRelease(
       Effect.tryPromise({
         try: () => mkdtemp(join(tmpdir(), "fireclanker-")),
@@ -29,7 +30,12 @@ export const runOpencode = Effect.fn("OpenCode.run")(
       )
     )
     const workspace = join(root, "workspace")
-    yield* clonePublicRepository({ sourceRepository, destination: workspace })
+    yield* repository.checkout({ sourceRepository, destination: workspace }).pipe(
+      Effect.mapError((error) => new OpenCodeError({
+        operation: "clone-public-repository",
+        cause: error.cause
+      }))
+    )
     const credentials = yield* Effect.tryPromise({
       try: () => fromNodeProviderChain()(),
       catch: (cause) => new OpenCodeError({ operation: "resolve-aws-credentials", cause })

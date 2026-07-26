@@ -1,4 +1,5 @@
-import { AgentHarness, type AgentJob } from "@fireclanker/core"
+import { NodeServices } from "@effect/platform-node"
+import { AgentHarness, type AgentJob, Repository } from "@fireclanker/core"
 import * as AWS from "alchemy/AWS"
 import { Effect, Layer } from "effect"
 import dockerfile from "./Dockerfile?raw" with { type: "text" }
@@ -80,4 +81,12 @@ export const AgentMicrovmLive = AgentMicrovm.make(
   })
 )
 
-export default AgentMicrovmLive.pipe(Layer.provide(AgentHarness.OpenCodeAgentHarness))
+const GitHubRepositoryLive = Repository.GitHubRepository.pipe(
+  Layer.provide(NodeServices.layer)
+)
+
+const OpenCodeAgentHarnessLive = AgentHarness.OpenCodeAgentHarness.pipe(
+  Layer.provide(GitHubRepositoryLive)
+)
+
+export default AgentMicrovmLive.pipe(Layer.provide(OpenCodeAgentHarnessLive))
