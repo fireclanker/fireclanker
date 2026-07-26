@@ -52,9 +52,11 @@ const stringAttribute = (
 
 const decodeJob = (item: Record<string, AttributeValue>) => {
   const status = stringAttribute(item, "status")
+  const sourceRepository = stringAttribute(item, "sourceRepository")
   const common = {
     id: stringAttribute(item, "id"),
     prompt: stringAttribute(item, "prompt"),
+    ...(sourceRepository === undefined ? {} : { sourceRepository }),
     status,
     createdAt: stringAttribute(item, "createdAt")
   }
@@ -122,6 +124,11 @@ export const DynamoAgentJobRepository = ({
       const put: IAgentJobRepository["put"] = Effect.fn(
         "AgentJobRepository.put"
       )(function*(job, createdAtIso) {
+        if (job.sourceRepository === undefined) {
+          return yield* Effect.fail(new AgentJobRepositoryError({
+            cause: new Error("New Agent Runs require a Source Repository")
+          }))
+        }
         yield* send(new PutItemCommand({
           TableName: tableName,
           Item: {
@@ -130,6 +137,7 @@ export const DynamoAgentJobRepository = ({
             entityType: { S: "AgentRun" },
             id: { S: job.id },
             prompt: { S: job.prompt },
+            sourceRepository: { S: job.sourceRepository },
             status: { S: job.status },
             createdAt: { S: createdAtIso },
             createdAtId: { S: `${createdAtIso}#${job.id}` }

@@ -38,7 +38,10 @@ describe("AgentJobService.queueJob", () => {
     const job = await Effect.runPromise(
       Effect.gen(function*() {
         const agentJob = yield* AgentJobService
-        return yield* agentJob.queueJob("  investigate the failure  ")
+        return yield* agentJob.queueJob({
+          prompt: "  investigate the failure  ",
+          sourceRepository: "Fireclanker/example.repo"
+        })
       }).pipe(
         Effect.provide(layer)
       )
@@ -46,6 +49,7 @@ describe("AgentJobService.queueJob", () => {
 
     expect(job.status).toBe("queued")
     expect(String(job.prompt)).toBe("  investigate the failure  ")
+    expect(String(job.sourceRepository)).toBe("Fireclanker/example.repo")
     expect(writes).toHaveLength(1)
     expect(writes[0]).toEqual({
       TableName: "fireclanker",
@@ -55,6 +59,7 @@ describe("AgentJobService.queueJob", () => {
         entityType: { S: "AgentRun" },
         id: { S: job.id },
         prompt: { S: job.prompt },
+        sourceRepository: { S: "Fireclanker/example.repo" },
         status: { S: "queued" },
         createdAt: { S: expect.any(String) },
         createdAtId: { S: expect.stringMatching(new RegExp(`#${job.id}$`)) }
@@ -71,7 +76,10 @@ describe("AgentJobService.queueJob", () => {
     const error = await Effect.runPromise(
       Effect.gen(function*() {
         const agentJob = yield* AgentJobService
-        return yield* agentJob.queueJob(" \n\t ").pipe(Effect.flip)
+        return yield* agentJob.queueJob({
+          prompt: " \n\t ",
+          sourceRepository: "fireclanker/example"
+        }).pipe(Effect.flip)
       }).pipe(
         Effect.provide(layer)
       )
@@ -80,6 +88,32 @@ describe("AgentJobService.queueJob", () => {
     expect(error._tag).toBe("InvalidAgentPrompt")
     expect(writes).toHaveLength(0)
   })
+
+  for (const sourceRepository of [
+    "https://github.com/fireclanker/example",
+    "fire--clanker/example"
+  ]) {
+    test(`rejects non-canonical Source Repository ${sourceRepository}`, async () => {
+      const { client, writes } = makeClient()
+      const layer = AgentJobServiceLive.pipe(
+        Layer.provide(DynamoAgentJobRepository({ tableName: "fireclanker", client }))
+      )
+      const error = await Effect.runPromise(
+        Effect.gen(function*() {
+          const agentJob = yield* AgentJobService
+          return yield* agentJob.queueJob({
+            prompt: "investigate",
+            sourceRepository
+          }).pipe(Effect.flip)
+        }).pipe(
+          Effect.provide(layer)
+        )
+      )
+
+      expect(error._tag).toBe("InvalidSourceRepository")
+      expect(writes).toHaveLength(0)
+    })
+  }
 })
 
 describe("AgentJob lifecycle", () => {
@@ -155,6 +189,7 @@ describe("AgentJob lifecycle", () => {
               SK: { S: "RUN" },
               id: { S: id },
               prompt: { S: "hello" },
+              sourceRepository: { S: "fireclanker/example" },
               status: { S: "succeeded" },
               createdAt: { S: now },
               startedAt: { S: now },
@@ -206,7 +241,69 @@ describe("AgentJob lifecycle", () => {
     )
 
     expect(result.job.status).toBe("succeeded")
+    expect(String(result.job.sourceRepository)).toBe("fireclanker/example")
     expect(result.events.map((event) => event.message)).toEqual(["event 1", "event 2"])
     expect(queryCalls).toBe(2)
+  })
+
+  test("decodes historical jobs without a Source Repository", async () => {
+    const id = crypto.randomUUID()
+    const client: AgentJobDynamoClient = {
+      send: async (command) => {
+        expect(command).toBeInstanceOf(GetItemCommand)
+        return {
+          $metadata: {},
+          Item: {
+            id: { S: id },
+            prompt: { S: "hello" },
+            status: { S: "queued" },
+            createdAt: { S: "2026-07-19T12:00:00.000Z" }
+          }
+        }
+      }
+    }
+    const jobId = Schema.decodeUnknownSync(AgentJobId)(id)
+    const layer = AgentJobServiceLive.pipe(
+      Layer.provide(DynamoAgentJobRepository({ tableName: "fireclanker", client }))
+    )
+
+    const job = await Effect.runPromise(
+      Effect.gen(function*() {
+        const service = yield* AgentJobService
+        return yield* service.get(jobId)
+      }).pipe(Effect.provide(layer), Effect.scoped)
+    )
+
+    expect(job.status).toBe("queued")
+    expect(job.sourceRepository).toBeUndefined()
+  })
+
+  test("rejects malformed persisted Source Repository data", async () => {
+    const id = crypto.randomUUID()
+    const client: AgentJobDynamoClient = {
+      send: async () => ({
+        $metadata: {},
+        Item: {
+          id: { S: id },
+          prompt: { S: "hello" },
+          sourceRepository: { S: "https://github.com/fireclanker/example" },
+          status: { S: "queued" },
+          createdAt: { S: "2026-07-19T12:00:00.000Z" }
+        }
+      })
+    }
+    const jobId = Schema.decodeUnknownSync(AgentJobId)(id)
+    const layer = AgentJobServiceLive.pipe(
+      Layer.provide(DynamoAgentJobRepository({ tableName: "fireclanker", client }))
+    )
+
+    const error = await Effect.runPromise(
+      Effect.gen(function*() {
+        const service = yield* AgentJobService
+        return yield* service.get(jobId).pipe(Effect.flip)
+      }).pipe(Effect.provide(layer), Effect.scoped)
+    )
+
+    expect(error._tag).toBe("AgentJobOperationError")
   })
 })

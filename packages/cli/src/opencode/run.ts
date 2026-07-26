@@ -1,13 +1,18 @@
-import { mkdtemp, mkdir, rm } from "node:fs/promises"
+import { mkdtemp, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { fromNodeProviderChain } from "@aws-sdk/credential-providers"
 import { Effect } from "effect"
+import type { AgentJob } from "@fireclanker/core"
 import { bedrockModel, bedrockOpencodeConfig } from "./bedrock.ts"
+import { clonePublicRepository } from "./clone.ts"
 import { makeOpenCode, OpenCodeError, type OpenCodePart } from "./effect-sdk.ts"
 
 export const runOpencode = Effect.fn("OpenCode.run")(
-  function*(prompt: string) {
+  function*({ prompt, sourceRepository }: {
+    readonly prompt: string
+    readonly sourceRepository: AgentJob.SourceRepository
+  }) {
     const root = yield* Effect.acquireRelease(
       Effect.tryPromise({
         try: () => mkdtemp(join(tmpdir(), "fireclanker-")),
@@ -24,10 +29,7 @@ export const runOpencode = Effect.fn("OpenCode.run")(
       )
     )
     const workspace = join(root, "workspace")
-    yield* Effect.tryPromise({
-      try: () => mkdir(workspace),
-      catch: (cause) => new OpenCodeError({ operation: "create-workspace", cause })
-    })
+    yield* clonePublicRepository({ sourceRepository, destination: workspace })
     const credentials = yield* Effect.tryPromise({
       try: () => fromNodeProviderChain()(),
       catch: (cause) => new OpenCodeError({ operation: "resolve-aws-credentials", cause })

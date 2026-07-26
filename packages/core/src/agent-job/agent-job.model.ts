@@ -17,6 +17,14 @@ export const AgentPrompt = Schema.String.check(
 ).pipe(Schema.brand("AgentPrompt"))
 export type AgentPrompt = typeof AgentPrompt.Type
 
+export const SourceRepository = Schema.String.check(
+  Schema.isPattern(
+    /^(?![A-Za-z0-9-]*--)[A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?\/(?!\.{1,2}$)[A-Za-z0-9._-]{1,100}$/,
+    { message: "Source Repository must use the GitHub owner/name format" }
+  )
+).pipe(Schema.brand("SourceRepository"))
+export type SourceRepository = typeof SourceRepository.Type
+
 export const AgentJobResult = Schema.String.check(Schema.isMinLength(1))
 export const FailureDescription = Schema.String.check(Schema.isMinLength(1))
 export const AgentJobEventMessage = Schema.String.check(Schema.isMaxLength(8192))
@@ -24,6 +32,7 @@ export const AgentJobEventMessage = Schema.String.check(Schema.isMaxLength(8192)
 const fields = {
   id: AgentJobId,
   prompt: AgentPrompt,
+  sourceRepository: Schema.optionalKey(SourceRepository),
   createdAt: Schema.DateTimeUtcFromString
 } as const
 
@@ -97,10 +106,19 @@ export class AgentJobEvent extends Model.Class<AgentJobEvent>("AgentJobEvent")({
   * @since
   * @category model method
   */
-export const make = Effect.fn("AgentJob.make")(function*(prompt: AgentPrompt) {
+export const make = Effect.fn("AgentJob.make")(function*(
+  prompt: AgentPrompt,
+  sourceRepository: SourceRepository
+) {
   const id = yield* Effect.sync(() => crypto.randomUUID() as AgentJobId)
   const createdAt = yield* DateTime.now
-  const job = new QueuedAgentJob({ id, prompt, status: "queued", createdAt })
+  const job = new QueuedAgentJob({
+    id,
+    prompt,
+    sourceRepository,
+    status: "queued",
+    createdAt
+  })
   const createdAtIso = DateTime.formatIso(createdAt)
 
   return { job, createdAtIso } as const

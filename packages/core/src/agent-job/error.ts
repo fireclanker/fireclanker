@@ -9,6 +9,11 @@ export class InvalidAgentPrompt extends Schema.TaggedErrorClass<InvalidAgentProm
   { cause: Schema.Defect() }
 ) { }
 
+export class InvalidSourceRepository extends Schema.TaggedErrorClass<InvalidSourceRepository>()(
+  "InvalidSourceRepository",
+  { cause: Schema.Defect() }
+) { }
+
 /**
   * @since
   * @category error

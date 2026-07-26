@@ -12,6 +12,7 @@ const agentSourcePaths = [
   "./agent-microvm.ts",
   "./Dockerfile",
   "../opencode/bedrock.ts",
+  "../opencode/clone.ts",
   "../opencode/effect-sdk.ts",
   "../opencode/run.ts",
   "../../package.json",

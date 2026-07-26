@@ -53,7 +53,7 @@ test("init writes the required deployment configuration", async () => {
 for (const [command, args] of [
   ["deploy", []],
   ["destroy", []],
-  ["run", ["hello"]]
+  ["run", ["--repo", "fireclanker/example", "hello"]]
 ] as const) {
   test(`${command} requires initialization before accessing AWS`, async () => {
     const home = await makeHome()

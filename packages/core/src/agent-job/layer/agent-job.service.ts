@@ -4,6 +4,7 @@ import {
   AgentJobNotFound,
   AgentJobOperationError,
   InvalidAgentPrompt,
+  InvalidSourceRepository,
   QueueJobError
 } from "../error.ts"
 import { AgentJobRepository } from "../service/agent-job.repository.ts"
@@ -27,11 +28,16 @@ export const AgentJobServiceLive = Layer.effect(
       */
     const queueJob: IAgentJobService["queueJob"] = Effect.fn(
       "AgentJobService.queueJob"
-    )(function*(input) {
-      const prompt = yield* Schema.decodeUnknownEffect(AgentJobModel.AgentPrompt)(input).pipe(
+    )(function*(request) {
+      const prompt = yield* Schema.decodeUnknownEffect(AgentJobModel.AgentPrompt)(request.prompt).pipe(
         Effect.mapError((cause) => new InvalidAgentPrompt({ cause }))
       )
-      const { job, createdAtIso } = yield* AgentJobModel.make(prompt)
+      const sourceRepository = yield* Schema.decodeUnknownEffect(
+        AgentJobModel.SourceRepository
+      )(request.sourceRepository).pipe(
+        Effect.mapError((cause) => new InvalidSourceRepository({ cause }))
+      )
+      const { job, createdAtIso } = yield* AgentJobModel.make(prompt, sourceRepository)
 
       yield* repository.put(job, createdAtIso).pipe(
         Effect.mapError((cause) => new QueueJobError({ cause }))

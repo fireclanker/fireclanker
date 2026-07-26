@@ -16,6 +16,10 @@ _Avoid_: Sequence number, timestamp
 The immutable user-supplied instruction for one Agent Run. It contains at least one non-whitespace character and preserves the text as supplied.
 _Avoid_: Query, message, task
 
+**Source Repository**:
+The externally owned GitHub repository selected as source input for an Agent Run, identified by its canonical owner and repository name. The selection is immutable for the Agent Run even though the repository's contents may change.
+_Avoid_: Run Workspace, clone URL
+
 **Trusted Prompt**:
 An Agent Prompt assumed not to intentionally misuse the coding agent's runtime permissions. Compute isolation does not make a hostile prompt trusted.
 _Avoid_: Safe prompt, sandboxed prompt
@@ -47,6 +51,10 @@ _Avoid_: Result, response
 **Run Workspace**:
 The temporary filesystem available to one Agent Run. Its files are execution aids, not durable results or retrievable artifacts.
 _Avoid_: Repository, artifact store
+
+**Repository Checkout**:
+The Source Repository content made available within a Run Workspace for one Agent Run. It is ephemeral execution state rather than a durable result.
+_Avoid_: Source Repository, artifact
 
 **Execution Record**:
 The durable record of the agent's messages, tool calls, and other activity during an Agent Run. It is complete for a succeeded Agent Run and may be partial or absent when the Agent Run fails.

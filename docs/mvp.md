@@ -13,14 +13,16 @@ AWS Lambda's managed Firecracker microVM is the sandbox boundary. fireclanker do
 - AWS Lambda for agent execution
 - DynamoDB for run state, results
 - S3 for Execution Records: complete versioned OpenCode data archives for succeeded runs and best-effort partial archives for failed runs
+- GitHub Apps for short-lived access to private Source Repositories
+- AWS Secrets Manager for the GitHub App private key
 
 ## MVP scope
 
 The MVP only needs a working happy path. It does not include Agent Run retries, cancellation, custom timeout handling, multi-user authorization, a web UI, or automatic recovery. Normal AWS SDK transport retries are allowed, but fireclanker does not restart OpenCode execution within an Agent Run. AWS service limits, including Lambda's execution limit, still apply.
 
-An Agent Run finishes successfully with a textual response. Agent Runs do not operate on GitHub repositories or interact with GitHub.
+An Agent Run operates read-only on one GitHub Source Repository and finishes successfully with a textual response. The MVP clones the repository's default branch with complete file contents but without history beyond the checked-out tip, submodule initialization, Git LFS object fetching, branch pushes, or pull request creation. Workspace changes remain ephemeral.
 
-Submitted prompts are trusted in the MVP. Lambda's managed Firecracker microVM isolates compute from the host, but it does not prevent agent tools from discovering or exercising the Lambda execution role. The worker role must therefore be least-privileged to the deployment's resources. The MVP does not provide hostile-prompt isolation from AWS resources.
+Submitted prompts are trusted in the MVP. Lambda's managed Firecracker microVM isolates compute from the host, but it does not prevent agent tools from discovering or exercising the agent microVM execution role. That role must therefore be least-privileged and distinct from the queue worker role used to orchestrate runs and mint checkout credentials. The MVP does not provide hostile-prompt isolation from resources available through the agent microVM execution role.
 
 ## Configuration and deployment
 
@@ -64,15 +66,15 @@ The configured AWS account, region, and deployment name identify a deployment; d
 ### Submit a run
 
 ```sh
-fireclanker run "hi"
+fireclanker run --repo fireclanker/example "hi"
 ```
 
-`run` accepts a prompt, creates a queued Agent Run in DynamoDB, and returns immediately after printing its ID. It does not accept `--repo` or `--repos`.
+`run` requires one `--repo owner/name` Source Repository and a prompt, creates a queued Agent Run in DynamoDB, and returns immediately after printing its ID. The repository value is a canonical GitHub owner and repository name, not a clone URL; arbitrary hosts, embedded credentials, and multiple repositories are rejected. Revision selection is outside the MVP, so execution checks out the repository's default branch as it exists when the worker clones it.
 
 ### Submit and watch a run
 
 ```sh
-fireclanker run --watch "hi"
+fireclanker run --watch --repo fireclanker/example "hi"
 ```
 
 `--watch` creates the same queued Agent Run, prints its ID, then polls its persisted events and prints new OpenCode events until the run succeeds or fails. After observing a terminal state, it drains all remaining events before printing the final result or failure description. It exits non-zero when the Agent Run fails.
@@ -89,9 +91,10 @@ Watch mode has no client-side timeout. If a run is stranded in `queued` or `runn
 fireclanker list
 ```
 
-`list` prints all Agent Runs in the configured deployment, transparently traversing storage pages. Runs appear in deterministic reverse creation order, with equal creation times ordered by Agent Run ID. It prints at least:
+`list` prints all Agent Runs in the configured deployment, transparently traversing storage pages. Runs appear in deterministic reverse creation order, with equal creation times ordered by Agent Run ID. It omits the Source Repository field for historical records created before repository support. It prints at least:
 
 - Agent Run ID
+- Source Repository
 - status
 - creation time
 - response when succeeded
@@ -103,7 +106,7 @@ fireclanker list
 fireclanker get <agent-run-id>
 ```
 
-`get` prints the current state of an Agent Run. For a succeeded run it also prints the textual response; for a failed run it prints the failure description. Retrieving a failed run still exits zero because the read succeeded. Missing IDs and read failures exit non-zero.
+`get` prints the current state and Source Repository of an Agent Run. Historical Agent Runs created before Source Repository support have no Source Repository and remain readable. For a succeeded run it also prints the textual response; for a failed run it prints the failure description. Retrieving a failed run still exits zero because the read succeeded. Missing IDs and read failures exit non-zero.
 
 CLI output is human-oriented. The MVP does not define a stable JSON output contract; plain `run` is the exception and prints only the new Agent Run ID.
 
@@ -127,15 +130,16 @@ queued -> running -> succeeded
 
 Only caught failures that the worker can still persist become `failed`. A lost stream delivery can leave a run `queued`; a worker crash, hard Lambda timeout, or failure to persist a terminal state can leave it `running`. Recovery for stranded runs is outside the MVP.
 
-The minimum Agent Run data is:
+The minimum data for an Agent Run created with Source Repository support is:
 
 - ID
 - prompt
+- Source Repository owner and repository name
 - status
 - creation, start, and completion timestamps
 - final result or failure description
 
-The Agent Run ID is opaque and globally unique; it does not encode deployment, chronology, or lifecycle data. The prompt is immutable, must contain at least one non-whitespace character, and is otherwise preserved exactly as supplied.
+The Agent Run ID is opaque and globally unique; it does not encode deployment, chronology, or lifecycle data. The prompt is immutable, must contain at least one non-whitespace character, and is otherwise preserved exactly as supplied. The Source Repository selection is also immutable. New Agent Runs require it, while persisted records created before repository support remain decodable without it.
 
 Lifecycle timestamps are UTC instants written atomically with their transitions: creation with `queued`, start with the claim to `running`, and completion with a terminal outcome. Timestamps that do not apply to the current state are absent.
 
@@ -167,6 +171,7 @@ Suggested value objects include:
 
 - `AgentRunId`
 - `AgentPrompt`
+- `SourceRepository`
 
 ## Execution flow
 
@@ -180,16 +185,20 @@ CLI -> DynamoDB -> DynamoDB Stream -> Worker Lambda -> DynamoDB
 2. A DynamoDB Stream receives the insert.
 3. The stream invokes the worker Lambda for newly inserted queued Agent Runs, with one Agent Run per invocation.
 4. The worker conditionally changes the status from `queued` to `running`.
-5. The worker prepares a fresh isolated workspace and OpenCode data directory with no repository checkout.
-6. OpenCode runs unattended with its normal coding tools, including shell execution, workspace writes, and outbound network access, using the configured Bedrock model.
-7. Before creating the OpenCode session, the worker establishes the live event subscription. From session creation until the subscription is closed after prompt completion, each event delivered by that subscription is persisted to DynamoDB. Losing the subscription or failing to persist a delivered event fails the run.
-8. The worker extracts the textual response from OpenCode's final assistant message.
-9. After the prompt completes, the worker drains delivered events, closes the subscription, and cleanly stops the local OpenCode server.
-10. The worker stores a versioned archive of the entire per-run OpenCode data directory in S3. The archive includes a manifest with the archive format version, OpenCode version, and Agent Run ID, plus every data-directory file after shutdown, including the SQLite database and any full tool-output side files. The upload and checksum must be verified.
-11. Only after the complete Execution Record is verified does the worker atomically store the textual result and mark the run `succeeded`.
-12. If execution fails while the worker can still write, it stops OpenCode, preserves any partial Execution Record it can, stores a sanitized failure description, and marks the run `failed`. Abrupt termination may prevent any Execution Record from being stored.
+5. The worker prepares a fresh isolated Run Workspace and OpenCode data directory.
+6. For a public Source Repository, the queue worker requests a clone without credentials. For a private Source Repository, the queue worker uses its orchestration role to mint a short-lived, repository-scoped GitHub App installation token and passes it to the separately launched agent microVM, whose execution role cannot read the App private key. The token remains separate from the Agent Prompt and persisted Agent Run.
+7. The microVM creates a shallow, single-branch Repository Checkout of the default branch. Authentication is supplied only to the clone process; it is absent from the clone URL and repository configuration, and the token, helper files, and token-bearing environment are removed before OpenCode starts. The checkout contains complete file blobs so later reads do not require the token.
+8. OpenCode runs unattended in the Repository Checkout with its normal coding tools, including shell execution, workspace writes, and outbound network access, using the configured Bedrock model. It has no GitHub credential and cannot push workspace changes.
+9. Before creating the OpenCode session, the worker establishes the live event subscription. From session creation until the subscription is closed after prompt completion, each event delivered by that subscription is persisted to DynamoDB. Losing the subscription or failing to persist a delivered event fails the run.
+10. The worker extracts the textual response from OpenCode's final assistant message.
+11. After the prompt completes, the worker drains delivered events, closes the subscription, and cleanly stops the local OpenCode server.
+12. The worker stores a versioned archive of the entire per-run OpenCode data directory in S3. The archive includes a manifest with the archive format version, OpenCode version, and Agent Run ID, plus every data-directory file after shutdown, including the SQLite database and any full tool-output side files. The upload and checksum must be verified.
+13. Only after the complete Execution Record is verified does the worker atomically store the textual result and mark the run `succeeded`.
+14. If execution fails while the worker can still write, it stops OpenCode, preserves any partial Execution Record it can, stores a sanitized failure description, and marks the run `failed`. Abrupt termination may prevent any Execution Record from being stored.
 
-Files created in the run workspace are ephemeral execution aids. They are not retained as results or retrievable artifacts. The Execution Record is operational data and has no MVP CLI retrieval command; it can be accessed through S3 and AWS tooling.
+The Repository Checkout and files created in the Run Workspace are ephemeral execution aids. They are not retained as results or retrievable artifacts. The Execution Record is operational data and has no MVP CLI retrieval command; it can be accessed through S3 and AWS tooling.
+
+GitHub credentials are transport secrets rather than Agent Run data. App private keys and installation tokens must never be stored in DynamoDB, included in an Agent Prompt or clone URL, intentionally exposed to OpenCode, or emitted in events, results, failure descriptions, and logs. Only the queue worker role may read the App private key and mint installation tokens; the agent microVM execution role cannot. The agent microVM receives only the per-run installation token needed for checkout and removes its access to that token before OpenCode starts.
 
 The DynamoDB Stream event source must filter for inserted records whose entity type is `AgentRun` and whose status is `queued`, and its batch size is one. Agent events and status updates written to the same table must not start another worker invocation.
 

@@ -1,5 +1,7 @@
+import { NodeServices } from "@effect/platform-node"
 import * as AWS from "alchemy/AWS"
 import { Effect } from "effect"
+import type { AgentJob } from "@fireclanker/core"
 import { BEDROCK_MODEL_ID } from "../opencode/bedrock.ts"
 import { runOpencode } from "../opencode/run.ts"
 import dockerfile from "./Dockerfile?raw" with { type: "text" }
@@ -12,7 +14,10 @@ type AgentMicrovmError = {
 export class AgentMicrovm extends AWS.Lambda.MicrovmImage<
   AgentMicrovm,
   {
-    run: (prompt: string) => Effect.Effect<{
+    run: (request: {
+      readonly prompt: string
+      readonly sourceRepository: AgentJob.SourceRepository
+    }) => Effect.Effect<{
       readonly result: string
       readonly logs: ReadonlyArray<string>
     }, AgentMicrovmError>
@@ -65,7 +70,8 @@ export default AgentMicrovm.make(
   ),
   Effect.gen(function*() {
     return {
-      run: (prompt: string) => runOpencode(prompt).pipe(
+      run: ({ prompt, sourceRepository }) => runOpencode({ prompt, sourceRepository }).pipe(
+        Effect.provide(NodeServices.layer),
         Effect.mapError((cause): AgentMicrovmError => ({
           _tag: "AgentMicrovmError",
           operation: cause.operation
@@ -73,7 +79,10 @@ export default AgentMicrovm.make(
         Effect.tap(() => Effect.logInfo("OpenCode execution completed")),
         Effect.map((result) => ({
           result,
-          logs: ["[microvm] OpenCode completed with Claude Sonnet 4.6 on Bedrock"]
+          logs: [
+            "[microvm] public Source Repository checkout completed",
+            "[microvm] OpenCode completed with Claude Sonnet 4.6 on Bedrock"
+          ]
         }))
       )
     }

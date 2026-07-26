@@ -77,6 +77,10 @@ export class QueueWorker extends AWS.Lambda.Function<QueueWorker>()(
 
       const execute = Effect.gen(function*() {
         const job = yield* service.get(id)
+        if (job.sourceRepository === undefined) {
+          return yield* Effect.fail(new Error("Agent job has no Source Repository"))
+        }
+        const sourceRepository = job.sourceRepository
         yield* append("[lambda] worker claimed job")
         yield* append("[lambda] starting agent microvm")
         const vm = yield* runMicrovm({
@@ -102,7 +106,10 @@ export class QueueWorker extends AWS.Lambda.Function<QueueWorker>()(
             endpoint: vm.endpoint,
             authToken
           })
-          return yield* agent.run(job.prompt)
+          return yield* agent.run({
+            prompt: job.prompt,
+            sourceRepository
+          })
         }).pipe(
           Effect.ensuring(
             terminateMicrovm({ microvmIdentifier: vm.microvmId }).pipe(

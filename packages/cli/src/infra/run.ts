@@ -5,7 +5,11 @@ import { configureAwsSdk } from "./aws-sdk.ts"
 import { AlchemyServices } from "./services.ts"
 
 export const run = Effect.fn("Infrastructure.run")(
-  function*(prompt: string, watch: boolean) {
+  function*(
+    prompt: string,
+    sourceRepository: AgentJob.SourceRepository,
+    watch: boolean
+  ) {
     const config = yield* readConfig
     const { clientConfig } = yield* configureAwsSdk(config)
     const agentJobLayer = AgentJob.AgentJobServiceLive.pipe(
@@ -17,7 +21,7 @@ export const run = Effect.fn("Infrastructure.run")(
 
     yield* Effect.gen(function*() {
       const service = yield* AgentJob.AgentJobService
-      const job = yield* service.queueJob(prompt)
+      const job = yield* service.queueJob({ prompt, sourceRepository })
       yield* Console.log(job.id)
 
       if (watch) yield* service.watchJob(job.id)
