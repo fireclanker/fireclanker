@@ -1,11 +1,13 @@
 import { createHash } from "node:crypto"
 import { fileURLToPath } from "node:url"
+import { ParseError } from "@distilled.cloud/aws/Errors"
 import { execStack } from "alchemy/Cli/commands/deploy"
-import { Effect, Option } from "effect"
+import { Effect, Option, Schedule } from "effect"
 import * as FileSystem from "effect/FileSystem"
 import * as Path from "effect/Path"
 import { readConfig } from "../config.ts"
 import { configureAwsSdk } from "./aws-sdk.ts"
+import { ensureGitHubAppCredentials } from "./github-app-credentials.ts"
 import { AlchemyServices } from "./services.ts"
 
 const stackPath = fileURLToPath(new URL("./stack.ts", import.meta.url))
@@ -18,10 +20,28 @@ const agentSourceFiles = [
 ]
 const agentSourceDirectories = ["../../../core/src"]
 
+const transientAwsGatewayResponse = /\b(?:502 Bad Gateway|503 Service Unavailable|504 Gateway Timeout)\b/
+
+export const retryTransientAwsGatewayErrors = <A, E, R>(
+  effect: Effect.Effect<A, E, R>
+): Effect.Effect<A, E, R> => effect.pipe(
+  Effect.retry({
+    while: (error) => error instanceof ParseError && transientAwsGatewayResponse.test(error.message),
+    schedule: Schedule.exponential("250 millis"),
+    times: 2
+  })
+)
+
 export const deploy = Effect.fn("Infrastructure.deploy")(
   function*() {
     const config = yield* readConfig
-    const { profile } = yield* configureAwsSdk(config)
+    const { clientConfig, profile } = yield* configureAwsSdk(config)
+    const githubApp = yield* ensureGitHubAppCredentials(config, { clientConfig })
+    if (githubApp.created) {
+      yield* Effect.logInfo("Install the GitHub App on the repositories Fireclanker may access", {
+        installationUrl: githubApp.installationUrl
+      })
+    }
     const fs = yield* FileSystem.FileSystem
     const path = yield* Path.Path
     const files = yield* Effect.forEach(agentSourceFiles, (sourcePath) =>
@@ -56,13 +76,13 @@ export const deploy = Effect.fn("Infrastructure.deploy")(
       process.env.FIRECLANKER_NAME = config.name
       process.env.FIRECLANKER_AGENT_SOURCE_HASH = sourceHash
     })
-    yield* execStack({
+    yield* retryTransientAwsGatewayErrors(execStack({
       main: stackPath,
       stage: "prod",
       profile,
       envFile: Option.none(),
       yes: true
-    })
+    }))
   },
   Effect.provide(AlchemyServices),
   Effect.scoped

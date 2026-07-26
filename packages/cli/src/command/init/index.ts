@@ -5,6 +5,7 @@ import {
   AwsRegion,
   ConfigValue,
   DeploymentName,
+  GitHubOrganization,
   writeConfig
 } from "../../config.ts"
 
@@ -30,7 +31,12 @@ export const initialize = (
     placeholder: "default",
     validate: valid(ConfigValue, "Enter an AWS profile name")
   })
-  const configPath = yield* writeConfig({ name, region, awsProfile })
+  const githubOrganization = yield* text({
+    message: "GitHub organization",
+    placeholder: "acme",
+    validate: valid(GitHubOrganization, "Enter a valid GitHub organization name")
+  })
+  const configPath = yield* writeConfig({ name, region, awsProfile, githubOrganization })
   yield* success(`Wrote Fireclanker configuration to ${configPath}`)
 })
 

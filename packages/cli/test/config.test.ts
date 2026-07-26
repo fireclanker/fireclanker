@@ -32,7 +32,7 @@ test("init writes the required deployment configuration", async () => {
   const home = await makeHome()
   const previousHome = process.env.HOME
   process.env.HOME = home
-  const answers = ["fireclanker-dev", "us-east-1", "sandbox-us"]
+  const answers = ["fireclanker-dev", "us-east-1", "sandbox-us", "fireclanker"]
 
   try {
     await Effect.runPromise(initialize(
@@ -42,7 +42,8 @@ test("init writes the required deployment configuration", async () => {
     expect(JSON.parse(await readFile(join(home, ".config/fireclanker/config.json"), "utf8"))).toEqual({
       name: "fireclanker-dev",
       region: "us-east-1",
-      awsProfile: "sandbox-us"
+      awsProfile: "sandbox-us",
+      githubOrganization: "fireclanker"
     })
   } finally {
     if (previousHome === undefined) delete process.env.HOME

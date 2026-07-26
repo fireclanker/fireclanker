@@ -14,7 +14,7 @@ AWS Lambda's managed Firecracker microVM is the sandbox boundary. fireclanker do
 - DynamoDB for run state, results
 - S3 for Execution Records: complete versioned OpenCode data archives for succeeded runs and best-effort partial archives for failed runs
 - GitHub Apps for short-lived access to private Source Repositories
-- AWS Secrets Manager for the GitHub App private key
+- AWS Systems Manager Parameter Store for the GitHub App credentials
 
 ## MVP scope
 
@@ -32,7 +32,8 @@ The application uses `~/.config/fireclanker/config.json`:
 {
   "name": "fireclanker",
   "region": "us-east-1",
-  "awsProfile": "sandbox-us"
+  "awsProfile": "sandbox-us",
+  "githubOrganization": "fireclanker"
 }
 ```
 
@@ -41,6 +42,7 @@ The file contains only:
 - `name`: the deployment name and prefix used for AWS resources.
 - `region`: the AWS region containing the deployment.
 - `awsProfile`: the profile in `~/.aws/config` used for AWS credentials.
+- `githubOrganization`: the GitHub organization that owns the deployment's GitHub App.
 
 AWS credentials are not stored in this file. The AWS SDK resolves them from the configured profile.
 
@@ -50,7 +52,7 @@ Initialize Fireclanker before using any other command:
 fireclanker init
 ```
 
-`init` interactively asks for all three settings and writes the configuration file. All other commands require this file and fail with setup instructions when it is absent.
+`init` interactively asks for all four settings and writes the configuration file. All other commands require this file and fail with setup instructions when it is absent.
 
 For an SSO profile, authenticate it before deploying:
 
@@ -59,7 +61,11 @@ aws sso login --profile sandbox-us
 fireclanker deploy
 ```
 
-The configured AWS account, region, and deployment name identify a deployment; deploying the same tuple again updates that deployment. Commands use the configured `name`, `region`, and `awsProfile` to locate it.
+The configured AWS account, region, and deployment name identify a deployment; deploying the same tuple again updates that deployment. Commands use the configured `name`, `region`, and `awsProfile` to locate it. The GitHub organization owns a private GitHub App dedicated to that deployment.
+
+On the first deploy, Fireclanker reserves the SSM `SecureString` parameter `/fireclanker/<name>/github-app` with a `pending` envelope, then opens GitHub's App manifest flow in the operator's browser. An organization owner approves creation of a private App with repository Contents and Pull requests write permissions. Fireclanker exchanges the one-time manifest code and replaces the pending value with the App ID, slug, organization, and private key. The private key is not written to the local configuration, process environment, Alchemy state, stack outputs, or logs. Later deploys validate and reuse the ready parameter and do not create another App. The organization owner follows the emitted installation URL and installs the created App on the repositories Fireclanker may access.
+
+The pending envelope serializes first deployment so concurrent deploys cannot create multiple Apps. If registration is interrupted after the reservation, deployment stops rather than guessing whether GitHub created an App. An operator must inspect the organization's GitHub App settings, remove any orphaned App, and then remove the pending parameter before retrying. Destroying the AWS stack intentionally retains both the out-of-band parameter and GitHub App; deleting credentials without deleting the corresponding App would leave an unrecoverable registration.
 
 ## CLI
 
@@ -186,7 +192,7 @@ CLI -> DynamoDB -> DynamoDB Stream -> Worker Lambda -> DynamoDB
 3. The stream invokes the worker Lambda for newly inserted queued Agent Runs, with one Agent Run per invocation.
 4. The worker conditionally changes the status from `queued` to `running`.
 5. The worker prepares a fresh isolated Run Workspace and OpenCode data directory.
-6. For a public Source Repository, the queue worker requests a clone without credentials. For a private Source Repository, the queue worker uses its orchestration role to mint a short-lived, repository-scoped GitHub App installation token and passes it to the separately launched agent microVM, whose execution role cannot read the App private key. The token remains separate from the Agent Prompt and persisted Agent Run.
+6. For a public Source Repository, the queue worker requests a clone without credentials. For a private Source Repository, the queue worker reads the deployment's GitHub App credentials from its SSM SecureString, mints a short-lived, repository-scoped installation token, and passes it to the separately launched agent microVM, whose execution role cannot read the parameter. The token remains separate from the Agent Prompt and persisted Agent Run.
 7. The microVM creates a shallow, single-branch Repository Checkout of the default branch. Authentication is supplied only to the clone process; it is absent from the clone URL and repository configuration, and the token, helper files, and token-bearing environment are removed before OpenCode starts. The checkout contains complete file blobs so later reads do not require the token.
 8. OpenCode runs unattended in the Repository Checkout with its normal coding tools, including shell execution, workspace writes, and outbound network access, using the configured Bedrock model. It has no GitHub credential and cannot push workspace changes.
 9. Before creating the OpenCode session, the worker establishes the live event subscription. From session creation until the subscription is closed after prompt completion, each event delivered by that subscription is persisted to DynamoDB. Losing the subscription or failing to persist a delivered event fails the run.
@@ -198,7 +204,7 @@ CLI -> DynamoDB -> DynamoDB Stream -> Worker Lambda -> DynamoDB
 
 The Repository Checkout and files created in the Run Workspace are ephemeral execution aids. They are not retained as results or retrievable artifacts. The Execution Record is operational data and has no MVP CLI retrieval command; it can be accessed through S3 and AWS tooling.
 
-GitHub credentials are transport secrets rather than Agent Run data. App private keys and installation tokens must never be stored in DynamoDB, included in an Agent Prompt or clone URL, intentionally exposed to OpenCode, or emitted in events, results, failure descriptions, and logs. Only the queue worker role may read the App private key and mint installation tokens; the agent microVM execution role cannot. The agent microVM receives only the per-run installation token needed for checkout and removes its access to that token before OpenCode starts.
+GitHub credentials are transport secrets rather than Agent Run data. App private keys and installation tokens must never be stored in DynamoDB, included in an Agent Prompt or clone URL, intentionally exposed to OpenCode, or emitted in events, results, failure descriptions, and logs. Only the queue worker role may decrypt the deployment's GitHub App SSM parameter and mint installation tokens; the agent microVM execution role cannot. The agent microVM receives only the per-run installation token needed for checkout and removes its access to that token before OpenCode starts.
 
 The DynamoDB Stream event source must filter for inserted records whose entity type is `AgentRun` and whose status is `queued`, and its batch size is one. Agent events and status updates written to the same table must not start another worker invocation.
 

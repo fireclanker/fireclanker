@@ -17,10 +17,15 @@ export const AwsRegion = ConfigValue.check(
   Schema.isPattern(/^[a-z]{2}(?:-[a-z0-9]+)+-\d+$/)
 )
 
+export const GitHubOrganization = ConfigValue.check(
+  Schema.isPattern(/^(?![A-Za-z0-9-]*--)[A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?$/)
+)
+
 export const FireclankerConfig = Schema.Struct({
   name: DeploymentName,
   region: AwsRegion,
-  awsProfile: ConfigValue
+  awsProfile: ConfigValue,
+  githubOrganization: GitHubOrganization
 })
 
 export type FireclankerConfig = typeof FireclankerConfig.Type
@@ -45,6 +50,15 @@ export const readConfig = Effect.gen(function*() {
     try: () => JSON.parse(contents),
     catch: (cause) => new Error(`Invalid JSON in ${configPath}`, { cause })
   })
+  if (
+    typeof parsed === "object" &&
+    parsed !== null &&
+    !("githubOrganization" in parsed)
+  ) {
+    return yield* Effect.fail(new Error(
+      `Fireclanker configuration in ${configPath} has no GitHub organization. Run 'fireclanker init' again.`
+    ))
+  }
   return yield* Schema.decodeUnknownEffect(FireclankerConfig, {
     onExcessProperty: "error"
   })(parsed).pipe(
