@@ -3,6 +3,7 @@ import * as AWS from "alchemy/AWS"
 import { Duration, Effect, Layer, Schedule, Schema, Stream } from "effect"
 import * as FetchHttpClient from "effect/unstable/http/FetchHttpClient"
 import { AgentMicrovm, AgentMicrovmExecutionRole } from "./agent-microvm.ts"
+import { failureDescription, failureDiagnostic } from "./agent-failure.ts"
 import { TABLE_NAME } from "./constants.ts"
 import { FireclankerTable, TableEventsQueue } from "./table.ts"
 
@@ -12,8 +13,6 @@ const parseJobId = (body: string) => Effect.try({
 }).pipe(
   Effect.flatMap((message) => Schema.decodeUnknownEffect(AgentJob.AgentJobId)(message.jobId))
 )
-
-const sanitizeFailure = () => "OpenCode execution failed"
 
 export class QueueWorker extends AWS.Lambda.Function<QueueWorker>()(
   "QueueWorker",
@@ -134,8 +133,11 @@ export class QueueWorker extends AWS.Lambda.Function<QueueWorker>()(
 
       yield* execute.pipe(
         Effect.catch((cause) =>
-          service.fail(id, sanitizeFailure()).pipe(
-            Effect.andThen(Effect.logError("OpenCode job failed", { id, cause })),
+          service.fail(id, failureDescription(cause)).pipe(
+            Effect.andThen(Effect.logError("OpenCode job failed", {
+              id,
+              ...failureDiagnostic(cause)
+            })),
             Effect.catch((terminalCause) =>
               Effect.logError("Could not record OpenCode job failure", { id, terminalCause })
             )
