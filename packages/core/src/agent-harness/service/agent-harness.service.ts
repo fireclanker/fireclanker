@@ -1,10 +1,12 @@
 import { Context, Effect } from "effect"
 import type { SourceRepository } from "../../agent-job/agent-job.model.ts"
+import type { RepositoryCheckoutRequest } from "../../repository/service/repository.service.ts"
 import { AgentHarnessError } from "../error.ts"
 
 export interface AgentHarnessRunRequest {
   readonly prompt: string
   readonly sourceRepository: SourceRepository
+  readonly repositoryAuthentication?: RepositoryCheckoutRequest["authentication"]
 }
 
 export interface AgentHarnessRunResult {

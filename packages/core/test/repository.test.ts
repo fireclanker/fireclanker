@@ -1,6 +1,6 @@
 import { NodeServices } from "@effect/platform-node"
 import { expect, test } from "bun:test"
-import { Effect, Layer, Schema, Sink, Stream } from "effect"
+import { Effect, Layer, Redacted, Schema, Sink, Stream } from "effect"
 import * as PlatformError from "effect/PlatformError"
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process"
 import { mkdtemp, readFile, rm } from "node:fs/promises"
@@ -91,6 +91,35 @@ test("clones a public Source Repository with an isolated Git environment", async
   expect(observed.options.stdin).toBe("ignore")
   expect(observed.options.stdout).toBe("ignore")
   expect(observed.options.stderr).toBe("ignore")
+})
+
+test("authenticates a private checkout only through the clone process environment", async () => {
+  let observed: ChildProcess.Command | undefined
+  const token = "ghs_checkout_token"
+
+  await Effect.runPromise(Effect.gen(function*() {
+    const repository = yield* Repository
+    yield* repository.checkout({
+      sourceRepository,
+      destination: "/tmp/run/workspace",
+      authentication: { token: Redacted.make(token) }
+    })
+  }).pipe(Effect.provide(
+    GitHubRepository.pipe(Layer.provide(spawnerLayer(0, (command) => {
+      observed = command
+    })))
+  )))
+
+  expect(observed).toBeDefined()
+  expect(ChildProcess.isStandardCommand(observed!)).toBe(true)
+  if (!ChildProcess.isStandardCommand(observed!)) return
+  expect(observed.args.join(" ")).not.toContain(token)
+  expect(observed.options.extendEnv).toBe(false)
+  expect(observed.options.env).toMatchObject({
+    GIT_CONFIG_COUNT: "1",
+    GIT_CONFIG_KEY_0: "http.https://github.com/.extraheader",
+    GIT_CONFIG_VALUE_0: `Authorization: Basic ${Buffer.from(`x-access-token:${token}`).toString("base64")}`
+  })
 })
 
 test("reports a sanitized failure when Git cannot clone", async () => {

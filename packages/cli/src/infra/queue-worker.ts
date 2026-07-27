@@ -1,10 +1,14 @@
-import { AgentJob } from "@fireclanker/core"
+import { AgentJob, GitHub } from "@fireclanker/core"
 import * as AWS from "alchemy/AWS"
-import { Duration, Effect, Layer, Schedule, Schema, Stream } from "effect"
+import { Duration, Effect, Layer, Redacted, Schedule, Schema, Stream } from "effect"
 import * as FetchHttpClient from "effect/unstable/http/FetchHttpClient"
 import { AgentMicrovm, AgentMicrovmExecutionRole } from "./agent-microvm.ts"
 import { failureDescription, failureDiagnostic } from "./agent-failure.ts"
-import { TABLE_NAME } from "./constants.ts"
+import { DEPLOYMENT_NAME, TABLE_NAME } from "./constants.ts"
+import {
+  githubAppParameterName,
+  readGitHubAppCredentials
+} from "./github-app-credentials.ts"
 import { FireclankerTable, TableEventsQueue } from "./table.ts"
 
 const parseJobId = (body: string) => Effect.try({
@@ -35,6 +39,7 @@ export class QueueWorker extends AWS.Lambda.Function<QueueWorker>()(
     const terminateMicrovm = yield* AWS.Lambda.TerminateMicrovm(AgentMicrovm)
 
     if (!globalThis.__ALCHEMY_RUNTIME__) {
+      const { accountId, region } = yield* AWS.AWSEnvironment.current
       yield* host.bind`Allow(${host}, AgentJobStore(${table}))`({
         policyStatements: [{
           Effect: "Allow",
@@ -52,6 +57,15 @@ export class QueueWorker extends AWS.Lambda.Function<QueueWorker>()(
           Effect: "Allow",
           Action: ["iam:PassRole"],
           Resource: [executionRole.roleArn]
+        }]
+      })
+      yield* host.bind`Allow(${host}, GitHubAppCredentials)`({
+        policyStatements: [{
+          Effect: "Allow",
+          Action: ["ssm:GetParameter"],
+          Resource: [
+            `arn:aws:ssm:${region}:${accountId}:parameter${githubAppParameterName(DEPLOYMENT_NAME)}`
+          ]
         }]
       })
     }
@@ -80,6 +94,11 @@ export class QueueWorker extends AWS.Lambda.Function<QueueWorker>()(
           return yield* Effect.fail(new Error("Agent job has no Source Repository"))
         }
         const sourceRepository = job.sourceRepository
+        const githubApp = yield* readGitHubAppCredentials(DEPLOYMENT_NAME)
+        const repositoryAccessToken = yield* Effect.gen(function*() {
+          const access = yield* GitHub.GitHubRepositoryAccess
+          return yield* access.checkoutToken(sourceRepository)
+        }).pipe(Effect.provide(GitHub.GitHubAppRepositoryAccess(githubApp)))
         yield* append("[lambda] worker claimed job")
         yield* append("[lambda] starting agent microvm")
         const vm = yield* runMicrovm({
@@ -107,7 +126,10 @@ export class QueueWorker extends AWS.Lambda.Function<QueueWorker>()(
           })
           return yield* agent.run({
             prompt: job.prompt,
-            sourceRepository
+            sourceRepository,
+            repositoryAccessToken: repositoryAccessToken === undefined
+              ? undefined
+              : Redacted.value(repositoryAccessToken)
           })
         }).pipe(
           Effect.ensuring(

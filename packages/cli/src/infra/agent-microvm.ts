@@ -1,7 +1,7 @@
 import { NodeServices } from "@effect/platform-node"
 import { AgentHarness, type AgentJob, Repository } from "@fireclanker/core"
 import * as AWS from "alchemy/AWS"
-import { Effect, Layer } from "effect"
+import { Effect, Layer, Redacted } from "effect"
 import dockerfile from "./Dockerfile?raw" with { type: "text" }
 
 type AgentMicrovmError = {
@@ -15,6 +15,7 @@ export class AgentMicrovm extends AWS.Lambda.MicrovmImage<
     run: (request: {
       readonly prompt: string
       readonly sourceRepository: AgentJob.SourceRepository
+      readonly repositoryAccessToken?: string
     }) => Effect.Effect<{
       readonly result: string
       readonly logs: ReadonlyArray<string>
@@ -70,8 +71,14 @@ export const AgentMicrovmLive = AgentMicrovm.make(
     const agentHarness = yield* AgentHarness.AgentHarness
 
     return {
-      run: ({ prompt, sourceRepository }: AgentHarness.AgentHarnessRunRequest) =>
-        agentHarness.run({ prompt, sourceRepository }).pipe(
+      run: ({ prompt, sourceRepository, repositoryAccessToken }) =>
+        agentHarness.run({
+          prompt,
+          sourceRepository,
+          repositoryAuthentication: repositoryAccessToken === undefined
+            ? undefined
+            : { token: Redacted.make(repositoryAccessToken) }
+        }).pipe(
           Effect.mapError((cause): AgentMicrovmError => ({
             _tag: "AgentMicrovmError",
             operation: cause.operation

@@ -1,10 +1,13 @@
-import { Context, Effect } from "effect"
+import { Context, Effect, Redacted } from "effect"
 import type { SourceRepository } from "../../agent-job/agent-job.model.ts"
 import type { RepositoryError } from "../error.ts"
 
 export interface RepositoryCheckoutRequest {
   readonly sourceRepository: SourceRepository
   readonly destination: string
+  readonly authentication?: {
+    readonly token: Redacted.Redacted<string>
+  }
 }
 
 /**

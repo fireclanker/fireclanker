@@ -8,3 +8,8 @@ export class GitHubAppCreationError extends Schema.TaggedErrorClass<GitHubAppCre
   "GitHubAppCreationError",
   { operation: Schema.String }
 ) {}
+
+export class GitHubRepositoryAccessError extends Schema.TaggedErrorClass<GitHubRepositoryAccessError>()(
+  "GitHubRepositoryAccessError",
+  { operation: Schema.String }
+) {}

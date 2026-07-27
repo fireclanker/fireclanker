@@ -26,6 +26,11 @@ export interface EnsureGitHubAppCredentialsOptions {
   readonly createApp?: typeof GitHub.createApp
 }
 
+export interface ReadGitHubAppCredentialsOptions {
+  readonly client?: GitHubAppSsmClient
+  readonly clientConfig?: SSMClientConfig
+}
+
 const GitHubAppId = Schema.Number.check(
   Schema.isInt(),
   Schema.isGreaterThan(0)
@@ -55,6 +60,49 @@ const GitHubAppCredentialsEnvelope = Schema.Union([
 
 export const githubAppParameterName = (deploymentName: string): string =>
   `/fireclanker/${deploymentName}/github-app`
+
+export const readGitHubAppCredentials = Effect.fn("GitHub.readAppCredentials")(
+  function*(
+    deploymentName: string,
+    options: ReadGitHubAppCredentialsOptions = {}
+  ) {
+    const ownedClient = options.client === undefined
+    const client = options.client ?? (options.clientConfig === undefined
+      ? new SSMClient()
+      : new SSMClient(options.clientConfig))
+
+    return yield* Effect.gen(function*() {
+      const output = (yield* Effect.tryPromise({
+        try: () => client.send(new GetParameterCommand({
+          Name: githubAppParameterName(deploymentName),
+          WithDecryption: true
+        })),
+        catch: () => new Error("Unable to read GitHub App credentials")
+      })) as GetParameterCommandOutput
+      if (output.Parameter?.Type !== "SecureString" || output.Parameter.Value === undefined) {
+        return yield* Effect.fail(new Error("GitHub App credentials parameter is invalid"))
+      }
+      const envelope = yield* Schema.decodeUnknownEffect(
+        Schema.fromJsonString(GitHubAppCredentialsEnvelope)
+      )(output.Parameter.Value).pipe(
+        Effect.mapError(() => new Error("GitHub App credentials parameter is invalid"))
+      )
+      if (envelope.status !== "ready") {
+        return yield* Effect.fail(new Error("GitHub App credentials are not ready"))
+      }
+      return {
+        appId: envelope.appId,
+        organization: envelope.organization,
+        slug: envelope.slug,
+        privateKey: Redacted.make(envelope.privateKey)
+      } satisfies GitHub.GitHubAppCredentials
+    }).pipe(
+      Effect.ensuring(ownedClient
+        ? Effect.sync(() => client.destroy?.())
+        : Effect.void)
+    )
+  }
+)
 
 export const ensureGitHubAppCredentials = Effect.fn("GitHub.ensureAppCredentials")(
   function*(

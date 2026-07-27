@@ -11,6 +11,7 @@ import { Effect, Redacted } from "effect"
 import {
   ensureGitHubAppCredentials,
   githubAppParameterName,
+  readGitHubAppCredentials,
   type GitHubAppSsmClient
 } from "../src/infra/github-app-credentials.ts"
 
@@ -121,6 +122,47 @@ test("reuses existing GitHub App credentials", async () => {
     created: false,
     parameterName: "/fireclanker/fireclanker-prod/github-app"
   })
+})
+
+test("reads ready GitHub App credentials for the queue worker", async () => {
+  let observed: GetParameterCommand | undefined
+  const client: GitHubAppSsmClient = {
+    send: async (command) => {
+      if (!(command instanceof GetParameterCommand)) {
+        throw new Error("PutParameter should not be called") as SSMServiceException
+      }
+      observed = command
+      return {
+        Parameter: {
+          Name: githubAppParameterName(config.name),
+          Type: "SecureString",
+          Value: JSON.stringify({
+            version: 1,
+            status: "ready",
+            organization: "acme",
+            appId: 12345,
+            slug: "fireclanker-acme",
+            privateKey
+          })
+        },
+        $metadata: {}
+      }
+    }
+  }
+
+  const credentials = await Effect.runPromise(readGitHubAppCredentials(config.name, { client }))
+
+  expect(observed?.input).toEqual({
+    Name: "/fireclanker/fireclanker-prod/github-app",
+    WithDecryption: true
+  })
+  expect(credentials).toMatchObject({
+    appId: 12345,
+    organization: "acme",
+    slug: "fireclanker-acme"
+  })
+  expect(String(credentials.privateKey)).not.toContain("BEGIN RSA PRIVATE KEY")
+  expect(Redacted.value(credentials.privateKey)).toBe(privateKey)
 })
 
 test("rejects a pending GitHub App registration", async () => {

@@ -1,5 +1,5 @@
 import { dirname } from "node:path"
-import { Effect, Layer } from "effect"
+import { Effect, Layer, Redacted } from "effect"
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process"
 import { RepositoryError } from "../error.ts"
 import {
@@ -17,7 +17,16 @@ export const GitHubRepository = Layer.effect(
     const spawner = yield* ChildProcessSpawner.ChildProcessSpawner
 
     const checkout: IRepository["checkout"] = Effect.fn("GitHubRepository.checkout")(
-      function*({ sourceRepository, destination }) {
+      function*({ sourceRepository, destination, authentication }) {
+        const authenticationEnvironment = authentication === undefined
+          ? {}
+          : {
+            GIT_CONFIG_COUNT: "1",
+            GIT_CONFIG_KEY_0: "http.https://github.com/.extraheader",
+            GIT_CONFIG_VALUE_0: `Authorization: Basic ${Buffer.from(
+              `x-access-token:${Redacted.value(authentication.token)}`
+            ).toString("base64")}`
+          }
         const exitCode = yield* spawner.exitCode(ChildProcess.make("git", [
           "clone",
           "--depth",
@@ -35,7 +44,8 @@ export const GitHubRepository = Layer.effect(
             GIT_CONFIG_GLOBAL: "/dev/null",
             GIT_CONFIG_NOSYSTEM: "1",
             GIT_LFS_SKIP_SMUDGE: "1",
-            GIT_TERMINAL_PROMPT: "0"
+            GIT_TERMINAL_PROMPT: "0",
+            ...authenticationEnvironment
           },
           stdin: "ignore",
           stdout: "ignore",
