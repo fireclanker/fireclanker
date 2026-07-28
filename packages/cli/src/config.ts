@@ -32,6 +32,8 @@ export type FireclankerConfig = typeof FireclankerConfig.Type
 
 const resolveConfigPath = Effect.gen(function*() {
   const path = yield* Path.Path
+  const configHome = yield* Effect.sync(() => process.env.XDG_CONFIG_HOME)
+  if (configHome) return path.join(configHome, "fireclanker", "config.json")
   const home = yield* Effect.sync(() => process.env.HOME)
   if (!home) return yield* Effect.fail(new Error("HOME is not set"))
   return path.join(home, ".config", "fireclanker", "config.json")

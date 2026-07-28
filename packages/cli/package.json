@@ -5,6 +5,7 @@
   "private": true,
   "scripts": {
     "start": "bun run src/index.ts",
+    "test:e2e": "bun test ./e2e/deploy-run.e2e.ts --max-concurrency 1",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {

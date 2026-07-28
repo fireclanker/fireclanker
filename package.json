@@ -14,7 +14,8 @@
     }
   },
   "scripts": {
-    "cli": "bun run --filter @fireclanker/cli start"
+    "cli": "bun run --filter @fireclanker/cli start",
+    "test:e2e": "bun test ./packages/cli/e2e/deploy-run.e2e.ts --max-concurrency 1"
   },
   "devDependencies": {
     "@types/bun": "latest"
