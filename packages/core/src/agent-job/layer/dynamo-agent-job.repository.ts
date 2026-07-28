@@ -54,6 +54,11 @@ const decodeJob = (item: Record<string, AttributeValue>) => {
   const status = stringAttribute(item, "status")
   const sourceRepository = stringAttribute(item, "sourceRepository")
   const sourceBranch = stringAttribute(item, "sourceBranch")
+  const microvmId = stringAttribute(item, "microvmId")
+  const microvmEndpoint = stringAttribute(item, "microvmEndpoint")
+  const microvmEventBaseSequence = item.microvmEventBaseSequence?.N === undefined
+    ? undefined
+    : Number(item.microvmEventBaseSequence.N)
   const common = {
     id: stringAttribute(item, "id"),
     prompt: stringAttribute(item, "prompt"),
@@ -63,7 +68,15 @@ const decodeJob = (item: Record<string, AttributeValue>) => {
     createdAt: stringAttribute(item, "createdAt")
   }
   const value = status === "running"
-    ? { ...common, startedAt: stringAttribute(item, "startedAt") }
+    ? {
+      ...common,
+      startedAt: stringAttribute(item, "startedAt"),
+      ...(microvmId === undefined ? {} : { microvmId }),
+      ...(microvmEndpoint === undefined ? {} : { microvmEndpoint }),
+      ...(microvmEventBaseSequence === undefined
+        ? {}
+        : { microvmEventBaseSequence })
+    }
     : status === "succeeded"
       ? {
         ...common,
@@ -205,6 +218,32 @@ export const DynamoAgentJobRepository = ({
         }))
       })
 
+      /**
+        * @since
+        * @category layer method
+        */
+      const attachMicrovm: IAgentJobRepository["attachMicrovm"] = Effect.fn(
+        "AgentJobRepository.attachMicrovm"
+      )(function*(id, connection) {
+        yield* send(new UpdateItemCommand({
+          TableName: tableName,
+          Key: { PK: { S: `RUN#${id}` }, SK: { S: "RUN" } },
+          UpdateExpression:
+            "SET microvmId = :microvmId, microvmEndpoint = :microvmEndpoint, microvmEventBaseSequence = :microvmEventBaseSequence",
+          ConditionExpression:
+            "#status = :running AND attribute_not_exists(microvmId)",
+          ExpressionAttributeNames: { "#status": "status" },
+          ExpressionAttributeValues: {
+            ":running": { S: "running" },
+            ":microvmId": { S: connection.id },
+            ":microvmEndpoint": { S: connection.endpoint },
+            ":microvmEventBaseSequence": {
+              N: String(connection.eventBaseSequence)
+            }
+          }
+        }))
+      })
+
       const complete = (
         id: Parameters<IAgentJobRepository["succeed"]>[0],
         completedAtIso: string,
@@ -300,6 +339,7 @@ export const DynamoAgentJobRepository = ({
         put,
         claim,
         appendEvent,
+        attachMicrovm,
         succeed,
         fail,
         get,

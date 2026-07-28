@@ -160,6 +160,46 @@ describe("AgentJobService.queueJob", () => {
 })
 
 describe("AgentJob lifecycle", () => {
+  test("advertises a running microVM connection without changing lifecycle state", async () => {
+    const id = Schema.decodeUnknownSync(AgentJobId)(crypto.randomUUID())
+    const client: AgentJobDynamoClient = {
+      send: async (command) => {
+        expect(command).toBeInstanceOf(UpdateItemCommand)
+        if (!(command instanceof UpdateItemCommand)) throw new Error("unexpected command")
+        expect(command.input).toEqual({
+          TableName: "fireclanker",
+          Key: { PK: { S: `RUN#${id}` }, SK: { S: "RUN" } },
+          UpdateExpression:
+            "SET microvmId = :microvmId, microvmEndpoint = :microvmEndpoint, microvmEventBaseSequence = :microvmEventBaseSequence",
+          ConditionExpression:
+            "#status = :running AND attribute_not_exists(microvmId)",
+          ExpressionAttributeNames: { "#status": "status" },
+          ExpressionAttributeValues: {
+            ":running": { S: "running" },
+            ":microvmId": { S: "microvm-123" },
+            ":microvmEndpoint": { S: "microvm.lambda.example" },
+            ":microvmEventBaseSequence": { N: "3" }
+          }
+        })
+        return { $metadata: {} }
+      }
+    }
+
+    await Effect.runPromise(
+      Effect.gen(function*() {
+        const repository = yield* AgentJobRepository
+        yield* repository.attachMicrovm(id, {
+          id: "microvm-123",
+          endpoint: "microvm.lambda.example",
+          eventBaseSequence: 3
+        })
+      }).pipe(
+        Effect.provide(DynamoAgentJobRepository({ tableName: "fireclanker", client })),
+        Effect.scoped
+      )
+    )
+  })
+
   test("aliases terminal attribute names in update expressions", async () => {
     const client: AgentJobDynamoClient = {
       send: async (command) => {
@@ -216,6 +256,44 @@ describe("AgentJob lifecycle", () => {
     )
 
     expect(claims).toEqual([true, false])
+  })
+
+  test("decodes the advertised microVM connection for a running job", async () => {
+    const id = crypto.randomUUID()
+    const now = "2026-07-28T12:00:00.000Z"
+    const client: AgentJobDynamoClient = {
+      send: async () => ({
+        $metadata: {},
+        Item: {
+          id: { S: id },
+          prompt: { S: "hello" },
+          status: { S: "running" },
+          createdAt: { S: now },
+          startedAt: { S: now },
+          microvmId: { S: "microvm-123" },
+          microvmEndpoint: { S: "microvm.lambda.example" },
+          microvmEventBaseSequence: { N: "3" }
+        }
+      })
+    }
+    const jobId = Schema.decodeUnknownSync(AgentJobId)(id)
+    const layer = AgentJobServiceLive.pipe(
+      Layer.provide(DynamoAgentJobRepository({ tableName: "fireclanker", client }))
+    )
+
+    const job = await Effect.runPromise(
+      Effect.gen(function*() {
+        const service = yield* AgentJobService
+        return yield* service.get(jobId)
+      }).pipe(Effect.provide(layer), Effect.scoped)
+    )
+
+    expect(job).toMatchObject({
+      status: "running",
+      microvmId: "microvm-123",
+      microvmEndpoint: "microvm.lambda.example",
+      microvmEventBaseSequence: 3
+    })
   })
 
   test("decodes terminal jobs and ordered events", async () => {

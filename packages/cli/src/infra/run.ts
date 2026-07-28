@@ -2,6 +2,10 @@ import { AgentJob } from "@fireclanker/core"
 import { Console, Effect, Layer } from "effect"
 import { readConfig } from "../config.ts"
 import { configureAwsSdk } from "./aws-sdk.ts"
+import {
+  MicrovmAgentJobLiveFeed,
+  watchAgentJob
+} from "./agent-job-watch.ts"
 import { AlchemyServices } from "./services.ts"
 
 export const run = Effect.fn("Infrastructure.run")(
@@ -13,7 +17,7 @@ export const run = Effect.fn("Infrastructure.run")(
     const { sourceBranch, sourceRepository } =
       AgentJob.parseSourceRepositoryArgument(sourceRepositoryArgument)
     const config = yield* readConfig
-    const { clientConfig } = yield* configureAwsSdk(config)
+    const { clientConfig, credentials } = yield* configureAwsSdk(config)
     const agentJobLayer = AgentJob.AgentJobServiceLive.pipe(
       Layer.provide(AgentJob.DynamoAgentJobRepository({
         tableName: config.name,
@@ -30,7 +34,15 @@ export const run = Effect.fn("Infrastructure.run")(
       })
       yield* Console.log(job.id)
 
-      if (watch) yield* service.watchJob(job.id)
+      if (watch) {
+        yield* watchAgentJob(
+          job.id,
+          MicrovmAgentJobLiveFeed({
+            region: config.region,
+            credentials
+          })
+        )
+      }
     }).pipe(Effect.provide(agentJobLayer))
   },
   Effect.provide(AlchemyServices),

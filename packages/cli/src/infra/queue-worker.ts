@@ -3,7 +3,7 @@ import * as NodeHttpClient from "@effect/platform-node/NodeHttpClient"
 import * as AWS from "alchemy/AWS"
 import { Duration, Effect, Layer, Redacted, Schedule, Schema, Stream } from "effect"
 import { AgentMicrovm, AgentMicrovmExecutionRole } from "./agent-microvm.ts"
-import { requireAgentMicrovmResponse } from "./agent-microvm-response.ts"
+import { consumeAgentMicrovmStream } from "./agent-microvm-response.ts"
 import { failureDescription, failureDiagnostic } from "./agent-failure.ts"
 import { DEPLOYMENT_NAME, TABLE_NAME } from "./constants.ts"
 import {
@@ -138,7 +138,7 @@ export class QueueWorker extends AWS.Lambda.Function<QueueWorker>()(
             endpoint: vm.endpoint,
             authToken
           })
-          return yield* agent.run({
+          yield* agent.start({
             prompt: job.prompt,
             sourceRepository,
             sourceBranch,
@@ -147,6 +147,12 @@ export class QueueWorker extends AWS.Lambda.Function<QueueWorker>()(
               ? undefined
               : Redacted.value(repositoryAccessToken)
           })
+          yield* service.attachMicrovm(id, {
+            id: vm.microvmId,
+            endpoint: vm.endpoint,
+            eventBaseSequence: sequence
+          })
+          return yield* consumeAgentMicrovmStream(agent.events(), append)
         }).pipe(
           Effect.ensuring(
             terminateMicrovm({ microvmIdentifier: vm.microvmId }).pipe(
@@ -168,11 +174,9 @@ export class QueueWorker extends AWS.Lambda.Function<QueueWorker>()(
                 yield* access.revokeToken(repositoryAccessToken)
               }).pipe(Effect.provide(githubAccessLayer))
           ),
-          Effect.provide(NodeHttpClient.layerUndici),
-          Effect.flatMap(requireAgentMicrovmResponse)
+          Effect.provide(NodeHttpClient.layerUndici)
         )
 
-        for (const message of response.logs) yield* append(message)
         const publication = yield* Effect.gen(function*() {
           const access = yield* GitHub.GitHubRepositoryAccess
           return yield* access.publish({

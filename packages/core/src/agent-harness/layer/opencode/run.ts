@@ -69,7 +69,7 @@ export const runOpencode = Effect.fn("OpenCode.run")(
     readonly sourceBranch?: SourceBranch
     readonly publicationOptions: ReadonlyArray<PublicationOption>
     readonly repositoryAuthentication?: RepositoryCheckoutRequest["authentication"]
-  }) {
+  }, emit: (message: string) => Effect.Effect<unknown>) {
     const repository = yield* Repository
     const root = yield* Effect.acquireRelease(
       Effect.tryPromise({
@@ -99,6 +99,7 @@ export const runOpencode = Effect.fn("OpenCode.run")(
         cause: error.cause
       }))
     )
+    yield* emit("[microvm] Source Repository checkout completed")
     repositoryAuthentication = undefined
     const credentials = yield* Effect.tryPromise({
       try: () => fromNodeProviderChain()(),
@@ -224,6 +225,8 @@ export const runOpencode = Effect.fn("OpenCode.run")(
         cause: new Error("Agent changed to an unavailable publication target")
       }))
     }
+    yield* emit("[microvm] OpenCode completed with Claude Sonnet 4.6 on Bedrock")
+    yield* emit(`[microvm] Agent selected ${completion.publication.kind}`)
     const changes = completion.publication.kind === "publish"
       ? yield* repository.changes({
         destination: workspace,

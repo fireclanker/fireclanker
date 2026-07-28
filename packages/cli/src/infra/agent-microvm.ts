@@ -1,46 +1,15 @@
 import { NodeServices } from "@effect/platform-node"
 import {
   AgentHarness,
-  type AgentJob,
-  type Publication,
   Repository
 } from "@fireclanker/core"
 import * as AWS from "alchemy/AWS"
-import { Effect, Layer, Redacted } from "effect"
+import { Effect, Layer } from "effect"
 import dockerfile from "./Dockerfile?raw" with { type: "text" }
-import type { AgentMicrovmError } from "./agent-microvm-response.ts"
+import { makeAgentMicrovmCoordinator } from "./agent-microvm-coordinator.ts"
+import { AgentMicrovm } from "./agent-microvm-rpc.ts"
 
-const errorReason = (cause: unknown): string | undefined => {
-  if (cause instanceof Error) return `${cause.name}: ${cause.message}`.slice(0, 512)
-  if (
-    typeof cause === "object" &&
-    cause !== null &&
-    "message" in cause &&
-    typeof cause.message === "string"
-  ) {
-    return cause.message.slice(0, 512)
-  }
-  return undefined
-}
-
-export class AgentMicrovm extends AWS.Lambda.MicrovmImage<
-  AgentMicrovm,
-  {
-    run: (request: {
-      readonly prompt: string
-      readonly sourceRepository: AgentJob.SourceRepository
-      readonly sourceBranch?: AgentJob.SourceBranch
-      readonly publicationOptions: ReadonlyArray<Publication.PublicationOption>
-      readonly repositoryAccessToken?: string
-    }) => Effect.Effect<{
-      readonly result: string
-      readonly baseSha: string
-      readonly changes: Publication.ChangeSet
-      readonly publication: Publication.PublicationDecision
-      readonly logs: ReadonlyArray<string>
-    }, AgentMicrovmError>
-  }
->()("AgentMicrovm") {}
+export { AgentMicrovm } from "./agent-microvm-rpc.ts"
 
 const AgentMicrovmBuildRole = AWS.IAM.Role("AgentMicrovmBuildRole")
 
@@ -88,31 +57,7 @@ export const AgentMicrovmLive = AgentMicrovm.make(
   ),
   Effect.gen(function*() {
     const agentHarness = yield* AgentHarness.AgentHarness
-
-    return {
-      run: ({
-        prompt,
-        sourceRepository,
-        sourceBranch,
-        publicationOptions,
-        repositoryAccessToken
-      }) =>
-        agentHarness.run({
-          prompt,
-          sourceRepository,
-          sourceBranch,
-          publicationOptions,
-          repositoryAuthentication: repositoryAccessToken === undefined
-            ? undefined
-            : { token: Redacted.make(repositoryAccessToken) }
-        }).pipe(
-          Effect.mapError((cause): AgentMicrovmError => ({
-            _tag: "AgentMicrovmError",
-            operation: cause.operation,
-            reason: errorReason(cause.cause)
-          }))
-        )
-    }
+    return makeAgentMicrovmCoordinator(agentHarness)
   })
 )
 

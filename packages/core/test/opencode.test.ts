@@ -1,6 +1,6 @@
 import { NodeServices } from "@effect/platform-node"
 import { expect, test } from "bun:test"
-import { Effect, Layer, Schema } from "effect"
+import { Effect, Layer, Schema, Stream } from "effect"
 import { SourceRepository } from "../src/agent-job/agent-job.model.ts"
 import {
   AgentHarness,
@@ -28,9 +28,10 @@ test.skipIf(Bun.which("opencode") === null || process.env.FIRECLANKER_OPENCODE_I
         sourceRepository: Schema.decodeUnknownSync(SourceRepository)(
           "octocat/Hello-World"
         )
-      })
+      }).pipe(Stream.runCollect)
     }).pipe(Effect.provide(OpenCodeAgentHarnessLive)))
-    expect(response.result).toContain("hello from fireclanker")
+    const completed = Array.from(response).find((event) => event._tag === "completed")
+    expect(completed?.result.result).toContain("hello from fireclanker")
     expect({
       accessKeyId: process.env.AWS_ACCESS_KEY_ID,
       secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY,

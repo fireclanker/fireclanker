@@ -1,4 +1,4 @@
-import { Context, Effect } from "effect"
+import { Context, Stream } from "effect"
 import type {
   SourceBranch,
   SourceRepository
@@ -24,8 +24,17 @@ export interface AgentHarnessRunResult {
   readonly baseSha: string
   readonly changes: ChangeSet
   readonly publication: PublicationDecision
-  readonly logs: ReadonlyArray<string>
 }
+
+export type AgentHarnessRunEvent =
+  | {
+    readonly _tag: "log"
+    readonly message: string
+  }
+  | {
+    readonly _tag: "completed"
+    readonly result: AgentHarnessRunResult
+  }
 
 /**
   * @since
@@ -38,7 +47,7 @@ export interface IAgentHarness {
     */
   readonly run: (
     request: AgentHarnessRunRequest
-  ) => Effect.Effect<AgentHarnessRunResult, AgentHarnessError>
+  ) => Stream.Stream<AgentHarnessRunEvent, AgentHarnessError>
 }
 
 /**

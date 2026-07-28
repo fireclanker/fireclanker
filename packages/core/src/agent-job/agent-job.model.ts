@@ -88,6 +88,8 @@ export const parseSourceRepositoryArgument = (
 export const AgentJobResult = Schema.String.check(Schema.isMinLength(1))
 export const FailureDescription = Schema.String.check(Schema.isMinLength(1))
 export const AgentJobEventMessage = Schema.String.check(Schema.isMaxLength(8192))
+export const AgentMicrovmId = Schema.String.check(Schema.isMinLength(1))
+export const AgentMicrovmEndpoint = Schema.String.check(Schema.isMinLength(1))
 
 const fields = {
   id: AgentJobId,
@@ -113,7 +115,12 @@ export class QueuedAgentJob extends Model.Class<QueuedAgentJob>("QueuedAgentJob"
 export class RunningAgentJob extends Model.Class<RunningAgentJob>("RunningAgentJob")({
   ...fields,
   status: Schema.Literal("running"),
-  startedAt: Schema.DateTimeUtcFromString
+  startedAt: Schema.DateTimeUtcFromString,
+  microvmId: Schema.optionalKey(AgentMicrovmId),
+  microvmEndpoint: Schema.optionalKey(AgentMicrovmEndpoint),
+  microvmEventBaseSequence: Schema.optionalKey(
+    Schema.Number.check(Schema.isInt(), Schema.isGreaterThan(-1))
+  )
 }) { }
 
 /**

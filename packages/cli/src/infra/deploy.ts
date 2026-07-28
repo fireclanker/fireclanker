@@ -12,6 +12,8 @@ import { AlchemyServices } from "./services.ts"
 
 const stackPath = fileURLToPath(new URL("./stack.ts", import.meta.url))
 const agentSourceFiles = [
+  "./agent-microvm-coordinator.ts",
+  "./agent-microvm-rpc.ts",
   "./agent-microvm.ts",
   "./Dockerfile",
   "../../package.json",

@@ -8,7 +8,7 @@ const prompt = Argument.string("prompt").pipe(
 )
 
 const watch = Flag.boolean("watch").pipe(
-  Flag.withDescription("Stream persisted job output until completion")
+  Flag.withDescription("Stream live job output until completion")
 )
 
 const repo = Flag.string("repo").pipe(

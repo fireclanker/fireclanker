@@ -61,6 +61,7 @@ export const configureAwsSdk = (config: FireclankerConfig) => Effect.gen(functio
 
   return {
     profile: alchemyProfile,
+    credentials,
     clientConfig: {
       credentials: credentialProvider,
       region: config.region

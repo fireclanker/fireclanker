@@ -35,6 +35,7 @@ test("watch prints ordered events once before the terminal result", async () => 
     put: () => Effect.void,
     claim: () => Effect.succeed(false),
     appendEvent: () => Effect.void,
+    attachMicrovm: () => Effect.void,
     succeed: () => Effect.void,
     fail: () => Effect.void,
     get: () => Effect.succeed(job),

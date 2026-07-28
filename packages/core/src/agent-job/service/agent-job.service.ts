@@ -55,6 +55,19 @@ export interface IAgentJobService {
     * @since
     * @category service interface method
     */
+  readonly attachMicrovm: (
+    id: AgentJobId,
+    connection: {
+      readonly id: string
+      readonly endpoint: string
+      readonly eventBaseSequence: number
+    }
+  ) => Effect.Effect<void, AgentJobOperationError>
+
+  /**
+    * @since
+    * @category service interface method
+    */
   readonly succeed: (
     id: AgentJobId,
     result: string

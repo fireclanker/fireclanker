@@ -1,0 +1,7 @@
+# Stream live events from the agent microVM
+
+`run --watch` uses the running agent microVM as its low-latency event source and DynamoDB as its durable fallback. The microVM owns one execution and exposes a sequenced, replayable stream with log, completed, and failed events. The queue worker consumes that stream as the execution controller and persists bounded log events. A CLI may independently attach after a sequence using its own short-lived, port-scoped AWS auth token.
+
+The queue worker starts the single execution before advertising it. The Agent Run then stores only the microVM identifier, endpoint, and the DynamoDB event sequence immediately before microVM events. These values are connection metadata, not credentials. The CLI uses the shared sequence relationship to avoid printing live log events and their persisted copies twice. It also prints the textual response carried by the completion event and suppresses the later persisted copy. Direct-stream setup or transport failure does not fail execution; the CLI resumes DynamoDB polling and prints the persisted result. After the microVM's terminal event, the CLI always returns to DynamoDB because GitHub publication is performed by the queue worker after microVM termination.
+
+This keeps the queue worker as the sole owner of execution, checkout credentials, termination, and publication. It avoids using DynamoDB polling as the normal high-frequency transport without making the Agent Run dependent on a connected CLI.

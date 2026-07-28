@@ -100,6 +100,16 @@ export const AgentJobServiceLive = Layer.effect(
       * @since
       * @category layer method
       */
+    const attachMicrovm: IAgentJobService["attachMicrovm"] = Effect.fn(
+      "AgentJobService.attachMicrovm"
+    )((id, connection) => repository.attachMicrovm(id, connection).pipe(
+      Effect.mapError(operationError)
+    ))
+
+    /**
+      * @since
+      * @category layer method
+      */
     const succeed: IAgentJobService["succeed"] = Effect.fn(
       "AgentJobService.succeed"
     )(function*(id, result) {
@@ -189,6 +199,7 @@ export const AgentJobServiceLive = Layer.effect(
       queueJob,
       claim,
       appendEvent,
+      attachMicrovm,
       succeed,
       fail,
       get,

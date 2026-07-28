@@ -83,9 +83,9 @@ fireclanker run --repo fireclanker/example@feature/starting-point "hi"
 fireclanker run --watch --repo fireclanker/example "hi"
 ```
 
-`--watch` creates the same queued Agent Run, prints its ID, then polls its persisted events and prints new OpenCode events until the run succeeds or fails. After observing a terminal state, it drains all remaining events before printing the final result or failure description. It exits non-zero when the Agent Run fails.
+`--watch` creates the same queued Agent Run and prints its ID. While the run is queued, it polls persisted events. Once the queue worker advertises the running agent microVM's non-secret identifier and endpoint, the CLI mints its own short-lived, port-scoped microVM auth token and attaches directly to the replayable live event stream. The CLI prints the textual response from the stream's completion event, then returns to persisted events for publication progress and terminal confirmation without printing the persisted response twice.
 
-The watch mode does not require a separate streaming service. Events are persisted by the worker and queried from DynamoDB by the CLI.
+The queue worker consumes the same sequenced microVM stream and persists its bounded log events in DynamoDB. If direct attachment is unavailable because of IAM permissions, connection timing, or transport failure, watch transparently continues from those persisted events without failing the Agent Run. The microVM auth token is held only by the CLI process and is never stored in DynamoDB.
 
 The MVP does not include a command for resuming a watch on an existing Agent Run. After an interrupted watch, `get` can retrieve the run's current state.
 
@@ -183,10 +183,15 @@ Suggested value objects include:
 
 ## Execution flow
 
-The application has a direct AWS architecture:
+The application has a direct AWS architecture with an optional live observation path:
 
 ```text
 CLI -> DynamoDB -> DynamoDB Stream -> Worker Lambda -> DynamoDB
+                                      |           ^
+                                      v           |
+                                 agent microVM ----+
+                                      |
+                                      +-----------> CLI (--watch)
 ```
 
 1. The CLI writes a new queued Agent Run to DynamoDB.
@@ -198,14 +203,15 @@ CLI -> DynamoDB -> DynamoDB Stream -> Worker Lambda -> DynamoDB
 7. For a public Source Repository, the queue worker requests a clone without credentials. For a private Source Repository, it mints a short-lived, repository-scoped, Contents-read installation token and passes it separately from the Agent Prompt to the agent microVM.
 8. The microVM creates a shallow Repository Checkout of the selected Source Branch, or the repository default branch when none was selected, and fetches the exact commit for every offered Publication Option. Authentication is supplied only to these Git processes; it is absent from the clone URL and repository configuration and unavailable to OpenCode.
 9. Before editing, the coding agent selects one offered Publication Option. The harness discards any selection-phase workspace changes and resets the checkout to that option's exact head commit.
-10. OpenCode performs the task with its normal coding tools and no GitHub credential. Its structured completion contains the textual response and either a request to publish through the selected option or a decision not to publish.
-11. When publication is requested, the microVM captures at most 250 changed paths and 3 MiB of regular-file, executable-file, and symlink content relative to the selected head. Paths, modes, content, and total size are bounded again by the queue worker.
-12. The microVM returns the untrusted change set and terminates. The queue worker revokes the checkout token.
-13. The queue worker verifies that the Publication Decision names an option actually offered to this run, re-fetches its current GitHub state, and rejects an existing pull request whose head moved.
-14. The queue worker mints a new single-repository installation token with Contents and Pull requests write permissions. It creates Git blobs, a tree, and one commit through GitHub's Git database endpoints.
-15. A new-PR option creates `fireclanker/<agent-run-id>` and a draft pull request targeting the selected Source Branch or repository default branch. An existing-PR option fast-forwards its Fireclanker branch without force and does not create another pull request.
-16. The queue worker revokes the publication token, records the publication URL in the event feed and textual result, then marks the Agent Run `succeeded`.
-17. If execution or publication fails while the worker can still write, it stores a sanitized failure description and marks the run `failed`.
+10. The queue worker records the running microVM's non-secret identifier, endpoint, and current persisted-event sequence on the Agent Run. An attached CLI mints a short-lived token directly from AWS and subscribes after the corresponding microVM sequence.
+11. OpenCode performs the task with its normal coding tools and no GitHub credential. The microVM emits ordered, replayable events to both the queue worker and any attached CLI. The worker persists bounded log events as the durable fallback; the CLI displays the live copy and advances its persisted-event cursor so those copies are not printed twice.
+12. OpenCode's structured completion contains the textual response and either a request to publish through the selected option or a decision not to publish. When publication is requested, the microVM captures at most 250 changed paths and 3 MiB of regular-file, executable-file, and symlink content relative to the selected head. Paths, modes, content, and total size are bounded again by the queue worker.
+13. The microVM emits one terminal completion event containing the textual response and untrusted change set. The CLI prints that response directly. The queue worker consumes the same event, terminates the microVM, and revokes the checkout token. The CLI then returns to DynamoDB because publication happens after microVM termination; the persisted terminal response is used as fallback and is not printed again after successful direct delivery.
+14. The queue worker verifies that the Publication Decision names an option actually offered to this run, re-fetches its current GitHub state, and rejects an existing pull request whose head moved.
+15. The queue worker mints a new single-repository installation token with Contents and Pull requests write permissions. It creates Git blobs, a tree, and one commit through GitHub's Git database endpoints.
+16. A new-PR option creates `fireclanker/<agent-run-id>` and a draft pull request targeting the selected Source Branch or repository default branch. An existing-PR option fast-forwards its Fireclanker branch without force and does not create another pull request.
+17. The queue worker revokes the publication token, records the publication URL in the event feed and textual result, then marks the Agent Run `succeeded`.
+18. If execution or publication fails while the worker can still write, it stores a sanitized failure description and marks the run `failed`.
 
 The Repository Checkout and files created in the Run Workspace are ephemeral execution aids. They are not retained as results or retrievable artifacts. The Execution Record is operational data and has no MVP CLI retrieval command; it can be accessed through S3 and AWS tooling.
 
@@ -227,7 +233,7 @@ RUN#<id>           EVENT#<event-id>    AgentRunEvent
 
 Each OpenCode event delivered during the event-observation window produces exactly one append-only Agent Run Event. Events contain the run ID, a stable event ID, event type, timestamp, and a bounded representation of the serializable OpenCode event data. They have a total per-run order independent of timestamps, allowing `--watch` to query only events after its last cursor. Oversized details remain in the S3 Execution Record and may be represented by a reference in the event.
 
-Agent Run Events are the ordered watch feed, not the canonical complete execution history. After observing a terminal state, watch uses a strongly consistent event query to drain events committed before that terminal transition. The table includes an index that allows `list` to query Agent Run records in reverse creation order. The Agent Run store uses conditional updates for lifecycle transitions so a stream event cannot execute the same queued run twice.
+Agent Run Events are the durable watch fallback, not the canonical complete execution history. A running Agent Run may also carry the current microVM identifier, endpoint, and the persisted-event sequence immediately before microVM events; these are non-secret attachment metadata. After observing a terminal state, watch uses a strongly consistent event query to drain events committed before that terminal transition. The table includes an index that allows `list` to query Agent Run records in reverse creation order. The Agent Run store uses conditional updates for lifecycle transitions so a stream event cannot execute the same queued run twice.
 
 Agent Runs, Agent Run Events, and Execution Records have no TTL or per-run delete operation in the MVP. Redeployment preserves them for the lifetime of the deployment.
 
@@ -241,7 +247,7 @@ The final deployment bundle must be checked against Lambda's 250 MiB uncompresse
 
 A Service is a port and a Layer is an adapter. Service interfaces remain independent from concrete AWS and OpenCode implementations.
 
-The Agent Run persistence Service exposes domain lifecycle operations such as `create`, `claim`, `succeed`, `fail`, `get`, and `list`, rather than generic record writes. It owns conditional transitions and atomic state-field invariants. `claim` reports an already-claimed or terminal run as an expected not-claimed outcome; storage and decoding problems remain errors.
+The Agent Run persistence Service exposes domain lifecycle operations such as `create`, `claim`, `attachMicrovm`, `succeed`, `fail`, `get`, and `list`, rather than generic record writes. It owns conditional transitions and atomic state-field invariants. `attachMicrovm` advertises observation metadata only on a running run and only once. `claim` reports an already-claimed or terminal run as an expected not-claimed outcome; storage and decoding problems remain errors.
 
 Agent Run Events and Execution Records are run-scoped records outside the Agent Run aggregate. Their persistence Services expose append/archive operations without making their unbounded data part of ordinary aggregate reads.
 
