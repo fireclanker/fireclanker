@@ -1,5 +1,9 @@
-import { createOpencode as createOpencodeSdk } from "@opencode-ai/sdk/v2"
+import {
+  createOpencodeClient,
+  createOpencodeServer
+} from "@opencode-ai/sdk/v2"
 import { Effect, Schema } from "effect"
+import * as Http from "node:http"
 
 export class OpenCodeError extends Schema.TaggedErrorClass<OpenCodeError>()(
   "OpenCodeError",
@@ -17,6 +21,7 @@ export type OpenCodePart = {
 
 export type OpenCodeAssistantMessage = {
   readonly error?: unknown
+  readonly structured?: unknown
 }
 
 export type OpenCodeSessionCreateInput = {
@@ -34,6 +39,11 @@ export type OpenCodeSessionPromptInput = {
   readonly model: {
     readonly providerID: string
     readonly modelID: string
+  }
+  readonly format?: {
+    readonly type: "json_schema"
+    readonly schema: Record<string, unknown>
+    readonly retryCount?: number
   }
   readonly parts: ReadonlyArray<{
     readonly type: "text"
@@ -82,8 +92,54 @@ export type OpenCode = {
   }
 }
 
-// The generated SDK client type overflows TypeScript 5.9 when inferred through this adapter.
-const createOpencode = createOpencodeSdk as unknown as CreateOpencode
+const localhostFetch = (async (
+  input: Parameters<typeof globalThis.fetch>[0],
+  init?: RequestInit
+): Promise<Response> => {
+  const request = input instanceof Request
+    ? init === undefined ? input : new Request(input, init)
+    : new Request(String(input), init)
+  const body = request.method === "GET" || request.method === "HEAD"
+    ? undefined
+    : Buffer.from(await request.arrayBuffer())
+  return await new Promise<Response>((resolve, reject) => {
+    const outgoing = Http.request(request.url, {
+      method: request.method,
+      headers: Object.fromEntries(request.headers),
+      signal: request.signal
+    }, (incoming) => {
+      const chunks: Array<Uint8Array> = []
+      incoming.on("data", (chunk: Uint8Array) => chunks.push(chunk))
+      incoming.on("error", reject)
+      incoming.on("end", () => {
+        const headers = new Headers()
+        for (let index = 0; index < incoming.rawHeaders.length; index += 2) {
+          headers.append(incoming.rawHeaders[index]!, incoming.rawHeaders[index + 1]!)
+        }
+        resolve(new Response(Buffer.concat(chunks), {
+          status: incoming.statusCode,
+          statusText: incoming.statusMessage,
+          headers
+        }))
+      })
+    })
+    outgoing.on("error", reject)
+    outgoing.end(body)
+  })
+}) as typeof globalThis.fetch
+
+const createOpencode: CreateOpencode = async (options) => {
+  const server = await createOpencodeServer(options)
+  const client = createOpencodeClient({
+    baseUrl: server.url,
+    fetch: localhostFetch
+  })
+  return {
+    // The generated SDK client type overflows TypeScript 5.9 through this adapter.
+    client: client as unknown as OpenCodeSdk["client"],
+    server
+  }
+}
 
 export const makeOpenCode = (options: {
   readonly hostname: string

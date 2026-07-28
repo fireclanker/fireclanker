@@ -19,5 +19,8 @@ test("restricts OpenCode to Claude Sonnet 4.6 on Bedrock", () => {
   expect(config.enabled_providers).toEqual(["amazon-bedrock"])
   expect((config.provider as {
     "amazon-bedrock": { options: unknown }
-  })["amazon-bedrock"].options).toEqual({ region: "eu-west-1" })
+  })["amazon-bedrock"].options).toEqual({
+    region: "eu-west-1",
+    timeout: 480_000
+  })
 })

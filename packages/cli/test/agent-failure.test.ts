@@ -7,7 +7,8 @@ import {
 test("describes a typed agent failure with its operation", () => {
   const failure = {
     _tag: "AgentMicrovmError",
-    operation: "clone-repository"
+    operation: "clone-repository",
+    reason: "Error: repository not found"
   }
 
   expect(failureDescription(failure)).toBe(
@@ -15,7 +16,8 @@ test("describes a typed agent failure with its operation", () => {
   )
   expect(failureDiagnostic(failure)).toEqual({
     errorTag: "AgentMicrovmError",
-    operation: "clone-repository"
+    operation: "clone-repository",
+    reason: "Error: repository not found"
   })
 })
 
@@ -29,7 +31,8 @@ test("explains an empty OpenCode response", () => {
 test("does not expose malformed operation metadata", () => {
   const failure = {
     _tag: "AgentMicrovmError",
-    operation: "prompt-response\nsecret diagnostic"
+    operation: "prompt-response\nsecret diagnostic",
+    reason: "secret\ndiagnostic"
   }
 
   expect(failureDescription(failure)).toBe("OpenCode execution failed")

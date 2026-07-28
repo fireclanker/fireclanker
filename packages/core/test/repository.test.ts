@@ -3,10 +3,21 @@ import { expect, test } from "bun:test"
 import { Effect, Layer, Redacted, Schema, Sink, Stream } from "effect"
 import * as PlatformError from "effect/PlatformError"
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process"
-import { mkdtemp, readFile, rm } from "node:fs/promises"
+import {
+  chmod,
+  mkdtemp,
+  readFile,
+  rm,
+  symlink,
+  unlink,
+  writeFile
+} from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { SourceRepository } from "../src/agent-job/agent-job.model.ts"
+import {
+  SourceBranch,
+  SourceRepository
+} from "../src/agent-job/agent-job.model.ts"
 import {
   GitHubRepository,
   Repository
@@ -15,6 +26,8 @@ import {
 const sourceRepository = Schema.decodeUnknownSync(SourceRepository)(
   "Fireclanker/example.repo"
 )
+const sourceBranch = Schema.decodeUnknownSync(SourceBranch)("feature/explicit-start")
+const baseSha = "0123456789abcdef0123456789abcdef01234567"
 
 const spawnerLayer = (
   code: number,
@@ -23,10 +36,14 @@ const spawnerLayer = (
   ChildProcessSpawner.ChildProcessSpawner,
   ChildProcessSpawner.make(Effect.fnUntraced(function*(command) {
     inspect?.(command)
+    const stdout = ChildProcess.isStandardCommand(command) &&
+      command.args[0] === "rev-parse"
+      ? Stream.make(Buffer.from(`${baseSha}\n`))
+      : Stream.empty
     return ChildProcessSpawner.makeHandle({
       pid: ChildProcessSpawner.ProcessId(1),
       stdin: Sink.drain,
-      stdout: Stream.empty,
+      stdout,
       stderr: Stream.empty,
       all: Stream.empty,
       exitCode: Effect.succeed(ChildProcessSpawner.ExitCode(code)),
@@ -50,18 +67,21 @@ const failingSpawnerLayer = (diagnostic: string) => Layer.succeed(
   })))
 )
 
-test("clones a public Source Repository with an isolated Git environment", async () => {
+test("clones an explicit Source Branch with an isolated Git environment", async () => {
   let observed: ChildProcess.Command | undefined
 
   await Effect.runPromise(Effect.gen(function*() {
     const repository = yield* Repository
     yield* repository.checkout({
       sourceRepository,
+      sourceBranch,
       destination: "/tmp/run/workspace"
     })
   }).pipe(Effect.provide(
     GitHubRepository.pipe(Layer.provide(spawnerLayer(0, (command) => {
-      observed = command
+      if (ChildProcess.isStandardCommand(command) && command.args[0] === "clone") {
+        observed = command
+      }
     })))
   )))
 
@@ -75,6 +95,8 @@ test("clones a public Source Repository with an isolated Git environment", async
     "1",
     "--single-branch",
     "--no-tags",
+    "--branch",
+    "feature/explicit-start",
     "https://github.com/Fireclanker/example.repo.git",
     "/tmp/run/workspace"
   ])
@@ -106,7 +128,9 @@ test("authenticates a private checkout only through the clone process environmen
     })
   }).pipe(Effect.provide(
     GitHubRepository.pipe(Layer.provide(spawnerLayer(0, (command) => {
-      observed = command
+      if (ChildProcess.isStandardCommand(command) && command.args[0] === "clone") {
+        observed = command
+      }
     })))
   )))
 
@@ -154,6 +178,74 @@ test("sanitizes Git process failures", async () => {
   expect(error._tag).toBe("RepositoryError")
   expect(String(error.cause)).toBe("Error: Unable to start Git process")
   expect(String(error.cause)).not.toContain(diagnostic)
+})
+
+test("captures bounded tracked, untracked, deleted, executable, and symlink changes", async () => {
+  const root = await mkdtemp(join(tmpdir(), "fireclanker-changes-test-"))
+  const git = async (...args: ReadonlyArray<string>) => {
+    const process = Bun.spawn(["git", "-C", root, ...args], {
+      stdout: "pipe",
+      stderr: "pipe"
+    })
+    const [exitCode, stdout, stderr] = await Promise.all([
+      process.exited,
+      new Response(process.stdout).text(),
+      new Response(process.stderr).text()
+    ])
+    if (exitCode !== 0) throw new Error(stderr)
+    return stdout.trim()
+  }
+
+  try {
+    await git("init", "-q")
+    await git("config", "user.email", "fireclanker@example.com")
+    await git("config", "user.name", "Fireclanker")
+    await writeFile(join(root, "tracked.txt"), "before\n")
+    await writeFile(join(root, "deleted.txt"), "remove me\n")
+    await git("add", ".")
+    await git("commit", "-qm", "base")
+    const capturedBaseSha = await git("rev-parse", "HEAD")
+
+    await writeFile(join(root, "tracked.txt"), "after\n")
+    await unlink(join(root, "deleted.txt"))
+    await writeFile(join(root, "script.sh"), "#!/bin/sh\necho hello\n")
+    await chmod(join(root, "script.sh"), 0o755)
+    await symlink("tracked.txt", join(root, "tracked-link"))
+
+    const changes = await Effect.runPromise(Effect.gen(function*() {
+      const repository = yield* Repository
+      return yield* repository.changes({
+        destination: root,
+        baseSha: capturedBaseSha
+      })
+    }).pipe(Effect.provide(
+      GitHubRepository.pipe(Layer.provide(NodeServices.layer))
+    )))
+
+    expect(changes).toEqual([
+      { kind: "delete", path: "deleted.txt" },
+      {
+        kind: "upsert",
+        path: "script.sh",
+        mode: "100755",
+        contentBase64: Buffer.from("#!/bin/sh\necho hello\n").toString("base64")
+      },
+      {
+        kind: "upsert",
+        path: "tracked-link",
+        mode: "120000",
+        contentBase64: Buffer.from("tracked.txt").toString("base64")
+      },
+      {
+        kind: "upsert",
+        path: "tracked.txt",
+        mode: "100644",
+        contentBase64: Buffer.from("after\n").toString("base64")
+      }
+    ])
+  } finally {
+    await rm(root, { recursive: true, force: true })
+  }
 })
 
 test.skipIf(

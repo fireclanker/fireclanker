@@ -17,13 +17,73 @@ export const AgentPrompt = Schema.String.check(
 ).pipe(Schema.brand("AgentPrompt"))
 export type AgentPrompt = typeof AgentPrompt.Type
 
+const sourceRepositoryPattern =
+  /^(?![A-Za-z0-9-]*--)[A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?\/(?!\.{1,2}$)[A-Za-z0-9._-]{1,100}$/
+
 export const SourceRepository = Schema.String.check(
   Schema.isPattern(
-    /^(?![A-Za-z0-9-]*--)[A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?\/(?!\.{1,2}$)[A-Za-z0-9._-]{1,100}$/,
+    sourceRepositoryPattern,
     { message: "Source Repository must use the GitHub owner/name format" }
   )
 ).pipe(Schema.brand("SourceRepository"))
 export type SourceRepository = typeof SourceRepository.Type
+
+const isValidSourceBranch = (branch: string): boolean =>
+  branch.length > 0 &&
+  branch.length <= 255 &&
+  branch !== "@" &&
+  !branch.startsWith("-") &&
+  !branch.startsWith("/") &&
+  !branch.endsWith("/") &&
+  !branch.endsWith(".") &&
+  !branch.includes("..") &&
+  !branch.includes("@{") &&
+  !branch.includes("//") &&
+  !/[\u0000-\u0020\u007f~^:?*[\]\\]/.test(branch) &&
+  branch.split("/").every((segment) =>
+    !segment.startsWith(".") && !segment.endsWith(".lock")
+  )
+
+export const SourceBranch = Schema.String.check(
+  Schema.makeFilter(
+    (branch) => isValidSourceBranch(branch) ||
+      "Source Branch must be a valid Git branch name",
+    { title: "Source Branch" }
+  )
+).pipe(Schema.brand("SourceBranch"))
+export type SourceBranch = typeof SourceBranch.Type
+
+export const SourceRepositoryArgument = Schema.String.check(
+  Schema.makeFilter((input) => {
+    const separator = input.indexOf("@")
+    const repository = separator < 0 ? input : input.slice(0, separator)
+    const branch = separator < 0 ? undefined : input.slice(separator + 1)
+    if (!sourceRepositoryPattern.test(repository)) {
+      return "Source Repository must use the GitHub owner/name[@branch] format"
+    }
+    if (branch !== undefined && !isValidSourceBranch(branch)) {
+      return "Source Branch must be a valid Git branch name"
+    }
+    return true
+  }, { title: "Source Repository argument" })
+).pipe(Schema.brand("SourceRepositoryArgument"))
+export type SourceRepositoryArgument = typeof SourceRepositoryArgument.Type
+
+export const parseSourceRepositoryArgument = (
+  input: SourceRepositoryArgument
+): {
+  readonly sourceRepository: SourceRepository
+  readonly sourceBranch?: SourceBranch
+} => {
+  const separator = input.indexOf("@")
+  if (separator < 0) {
+    return { sourceRepository: input as string as SourceRepository }
+  }
+  return {
+    sourceRepository: input.slice(0, separator) as SourceRepository,
+    sourceBranch: input.slice(separator + 1) as SourceBranch
+  }
+}
 
 export const AgentJobResult = Schema.String.check(Schema.isMinLength(1))
 export const FailureDescription = Schema.String.check(Schema.isMinLength(1))
@@ -33,6 +93,7 @@ const fields = {
   id: AgentJobId,
   prompt: AgentPrompt,
   sourceRepository: Schema.optionalKey(SourceRepository),
+  sourceBranch: Schema.optionalKey(SourceBranch),
   createdAt: Schema.DateTimeUtcFromString
 } as const
 
@@ -108,7 +169,8 @@ export class AgentJobEvent extends Model.Class<AgentJobEvent>("AgentJobEvent")({
   */
 export const make = Effect.fn("AgentJob.make")(function*(
   prompt: AgentPrompt,
-  sourceRepository: SourceRepository
+  sourceRepository: SourceRepository,
+  sourceBranch?: SourceBranch
 ) {
   const id = yield* Effect.sync(() => crypto.randomUUID() as AgentJobId)
   const createdAt = yield* DateTime.now
@@ -116,6 +178,7 @@ export const make = Effect.fn("AgentJob.make")(function*(
     id,
     prompt,
     sourceRepository,
+    ...(sourceBranch === undefined ? {} : { sourceBranch }),
     status: "queued",
     createdAt
   })

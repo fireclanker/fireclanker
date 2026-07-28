@@ -2,19 +2,72 @@ import { mkdtemp, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { fromNodeProviderChain } from "@aws-sdk/credential-providers"
-import { Effect } from "effect"
-import type { SourceRepository } from "../../../agent-job/agent-job.model.ts"
+import { Effect, JsonSchema, Schema } from "effect"
+import type {
+  SourceBranch,
+  SourceRepository
+} from "../../../agent-job/agent-job.model.ts"
+import {
+  AgentCompletion,
+  type PublicationOption,
+  PublicationTargetSelection
+} from "../../../publication/publication.model.ts"
 import {
   Repository,
   type RepositoryCheckoutRequest
 } from "../../../repository/service/repository.service.ts"
 import { bedrockModel, bedrockOpencodeConfig } from "./bedrock.ts"
-import { makeOpenCode, OpenCodeError, type OpenCodePart } from "./effect-sdk.ts"
+import { makeOpenCode, OpenCodeError } from "./effect-sdk.ts"
+
+export const structuredOutputSchema = <A>(
+  schema: Schema.Codec<A, unknown, never, never>
+): Record<string, unknown> => {
+  const document = JsonSchema.resolveTopLevel$ref(
+    Schema.toJsonSchemaDocument(schema)
+  )
+  return Object.keys(document.definitions).length === 0
+    ? document.schema
+    : { ...document.schema, $defs: document.definitions }
+}
+
+const targetSelectionInstructions = (
+  prompt: string,
+  options: ReadonlyArray<PublicationOption>
+): string => [
+  "Select the repository state on which this coding task should be performed.",
+  "Do not modify files yet. Only select a target.",
+  "Choose an existing pull request only when it is clearly the same work;",
+  "otherwise choose the create-pull-request option.",
+  "Task:",
+  prompt,
+  "Available targets:",
+  JSON.stringify(options)
+].join("\n")
+
+const publicationInstructions = (
+  option: PublicationOption | undefined
+): string => [
+  "",
+  "Publication decision:",
+  "After completing the coding task, decide whether the changes should be published.",
+  "Choose the selected publication option ID below, or choose do-not-publish",
+  "when there are no useful changes, the work is incomplete, or publishing would be unsafe.",
+  "Selected publication target:",
+  option === undefined ? "No publication target is available." : JSON.stringify(option)
+].join("\n")
 
 export const runOpencode = Effect.fn("OpenCode.run")(
-  function*({ prompt, sourceRepository, repositoryAuthentication }: {
+  function*({
+    prompt,
+    sourceRepository,
+    sourceBranch,
+    publicationOptions,
+    repositoryAuthentication
+  }: {
     readonly prompt: string
     readonly sourceRepository: SourceRepository
+    readonly sourceBranch?: SourceBranch
+    readonly publicationOptions: ReadonlyArray<PublicationOption>
     readonly repositoryAuthentication?: RepositoryCheckoutRequest["authentication"]
   }) {
     const repository = yield* Repository
@@ -34,9 +87,11 @@ export const runOpencode = Effect.fn("OpenCode.run")(
       )
     )
     const workspace = join(root, "workspace")
-    yield* repository.checkout({
+    const checkout = yield* repository.checkout({
       sourceRepository,
+      sourceBranch,
       destination: workspace,
+      candidateBaseShas: publicationOptions.map((option) => option.expectedHeadSha),
       authentication: repositoryAuthentication
     }).pipe(
       Effect.mapError((error) => new OpenCodeError({
@@ -80,18 +135,71 @@ export const runOpencode = Effect.fn("OpenCode.run")(
       title: "Fireclanker run",
       model: { providerID: bedrockModel.providerID, id: bedrockModel.modelID }
     })
+    let selectedOption: PublicationOption | undefined
+    let selectedBaseSha = checkout.baseSha
+    if (publicationOptions.length > 0) {
+      const selectionResponse = yield* opencode.session.prompt({
+        sessionID: session.id,
+        directory: workspace,
+        model: bedrockModel,
+        format: {
+          type: "json_schema",
+          schema: structuredOutputSchema(PublicationTargetSelection),
+          retryCount: 2
+        },
+        parts: [{
+          type: "text",
+          text: targetSelectionInstructions(prompt, publicationOptions)
+        }]
+      })
+      if (selectionResponse.info.error) {
+        return yield* Effect.fail(new OpenCodeError({
+          operation: "select-publication-target",
+          cause: selectionResponse.info.error
+        }))
+      }
+      const selection = yield* Schema.decodeUnknownEffect(PublicationTargetSelection)(
+        selectionResponse.info.structured
+      ).pipe(
+        Effect.mapError((cause) => new OpenCodeError({
+          operation: "read-publication-target",
+          cause
+        }))
+      )
+      selectedOption = publicationOptions.find((option) =>
+        option.id === selection.optionId
+      )
+      if (selectedOption === undefined) {
+        return yield* Effect.fail(new OpenCodeError({
+          operation: "authorize-publication-target",
+          cause: new Error("Agent selected an unavailable publication target")
+        }))
+      }
+      selectedBaseSha = selectedOption.expectedHeadSha
+      yield* repository.reset({
+        destination: workspace,
+        baseSha: selectedBaseSha
+      }).pipe(
+        Effect.mapError((error) => new OpenCodeError({
+          operation: "prepare-publication-target",
+          cause: error.cause
+        }))
+      )
+    }
     const response = yield* opencode.session.prompt({
       sessionID: session.id,
       directory: workspace,
       model: bedrockModel,
-      parts: [{ type: "text", text: prompt }]
+      format: {
+        type: "json_schema",
+        schema: structuredOutputSchema(AgentCompletion),
+        retryCount: 2
+      },
+      parts: [{
+        type: "text",
+        text: `${prompt}${publicationInstructions(selectedOption)}`
+      }]
     })
-    const result = response.parts
-      .filter((part): part is OpenCodePart & { readonly text: string } =>
-        part.type === "text" && part.ignored !== true && typeof part.text === "string"
-      )
-      .map((part) => part.text)
-      .join("\n")
 
     if (response.info.error) {
       return yield* Effect.fail(new OpenCodeError({
@@ -99,13 +207,40 @@ export const runOpencode = Effect.fn("OpenCode.run")(
         cause: response.info.error
       }))
     }
-    if (!result.trim()) {
+    const completion = yield* Schema.decodeUnknownEffect(AgentCompletion)(
+      response.info.structured
+    ).pipe(
+      Effect.mapError((cause) => new OpenCodeError({
+        operation: "read-structured-response",
+        cause
+      }))
+    )
+    if (
+      completion.publication.kind === "publish" &&
+      completion.publication.optionId !== selectedOption?.id
+    ) {
       return yield* Effect.fail(new OpenCodeError({
-        operation: "read-prompt-response",
-        cause: new Error("OpenCode returned no text response")
+        operation: "authorize-publication-decision",
+        cause: new Error("Agent changed to an unavailable publication target")
       }))
     }
-    return result
+    const changes = completion.publication.kind === "publish"
+      ? yield* repository.changes({
+        destination: workspace,
+        baseSha: selectedBaseSha
+      }).pipe(
+        Effect.mapError((error) => new OpenCodeError({
+          operation: "capture-repository-changes",
+          cause: error.cause
+        }))
+      )
+      : []
+    return {
+      result: completion.response,
+      baseSha: selectedBaseSha,
+      changes,
+      publication: completion.publication
+    }
   },
   Effect.scoped
 )

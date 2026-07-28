@@ -20,7 +20,7 @@ AWS Lambda's managed Firecracker microVM is the sandbox boundary. fireclanker do
 
 The MVP only needs a working happy path. It does not include Agent Run retries, cancellation, custom timeout handling, multi-user authorization, a web UI, or automatic recovery. Normal AWS SDK transport retries are allowed, but fireclanker does not restart OpenCode execution within an Agent Run. AWS service limits, including Lambda's execution limit, still apply.
 
-An Agent Run operates read-only on one GitHub Source Repository and finishes successfully with a textual response. The MVP clones the repository's default branch with complete file contents but without history beyond the checked-out tip, submodule initialization, Git LFS object fetching, branch pushes, or pull request creation. Workspace changes remain ephemeral.
+An Agent Run operates on one GitHub Source Repository, optionally starting from an explicit Source Branch, and finishes successfully with a textual response. The queue worker offers a new draft pull request and any explicitly referenced open Fireclanker pull requests as Publication Options. The coding agent selects the target before editing, works from that target's exact head, then decides whether to publish or leave its workspace changes ephemeral. GitHub writes are performed by the queue worker after the microVM terminates.
 
 Submitted prompts are trusted in the MVP. Lambda's managed Firecracker microVM isolates compute from the host, but it does not prevent agent tools from discovering or exercising the agent microVM execution role. That role must therefore be least-privileged and distinct from the queue worker role used to orchestrate runs and mint checkout credentials. The MVP does not provide hostile-prompt isolation from resources available through the agent microVM execution role.
 
@@ -72,10 +72,10 @@ The pending envelope serializes first deployment so concurrent deploys cannot cr
 ### Submit a run
 
 ```sh
-fireclanker run --repo fireclanker/example "hi"
+fireclanker run --repo fireclanker/example@feature/starting-point "hi"
 ```
 
-`run` requires one `--repo owner/name` Source Repository and a prompt, creates a queued Agent Run in DynamoDB, and returns immediately after printing its ID. The repository value is a canonical GitHub owner and repository name, not a clone URL; arbitrary hosts, embedded credentials, and multiple repositories are rejected. Revision selection is outside the MVP, so execution checks out the repository's default branch as it exists when the worker clones it.
+`run` requires one `--repo owner/name[@branch]` Source Repository argument and a prompt, creates a queued Agent Run in DynamoDB, and returns immediately after printing its ID. The optional suffix selects the Source Branch explicitly; without it, execution uses the repository's default branch. The repository value is a canonical GitHub owner and repository name, not a clone URL; arbitrary hosts, embedded credentials, invalid Git branch names, and multiple repositories are rejected.
 
 ### Submit and watch a run
 
@@ -141,11 +141,12 @@ The minimum data for an Agent Run created with Source Repository support is:
 - ID
 - prompt
 - Source Repository owner and repository name
+- optional Source Branch
 - status
 - creation, start, and completion timestamps
 - final result or failure description
 
-The Agent Run ID is opaque and globally unique; it does not encode deployment, chronology, or lifecycle data. The prompt is immutable, must contain at least one non-whitespace character, and is otherwise preserved exactly as supplied. The Source Repository selection is also immutable. New Agent Runs require it, while persisted records created before repository support remain decodable without it.
+The Agent Run ID is opaque and globally unique; it does not encode deployment, chronology, or lifecycle data. The prompt is immutable, must contain at least one non-whitespace character, and is otherwise preserved exactly as supplied. The Source Repository and optional Source Branch selections are also immutable. New Agent Runs require a Source Repository, while persisted records created before repository support remain decodable without it.
 
 Lifecycle timestamps are UTC instants written atomically with their transitions: creation with `queued`, start with the claim to `running`, and completion with a terminal outcome. Timestamps that do not apply to the current state are absent.
 
@@ -178,6 +179,7 @@ Suggested value objects include:
 - `AgentRunId`
 - `AgentPrompt`
 - `SourceRepository`
+- `SourceBranch`
 
 ## Execution flow
 
@@ -192,19 +194,22 @@ CLI -> DynamoDB -> DynamoDB Stream -> Worker Lambda -> DynamoDB
 3. The stream invokes the worker Lambda for newly inserted queued Agent Runs, with one Agent Run per invocation.
 4. The worker conditionally changes the status from `queued` to `running`.
 5. The worker prepares a fresh isolated Run Workspace and OpenCode data directory.
-6. For a public Source Repository, the queue worker requests a clone without credentials. For a private Source Repository, the queue worker reads the deployment's GitHub App credentials from its SSM SecureString, mints a short-lived, repository-scoped installation token, and passes it to the separately launched agent microVM, whose execution role cannot read the parameter. The token remains separate from the Agent Prompt and persisted Agent Run.
-7. The microVM creates a shallow, single-branch Repository Checkout of the default branch. Authentication is supplied only to the clone process; it is absent from the clone URL and repository configuration, and the token, helper files, and token-bearing environment are removed before OpenCode starts. The checkout contains complete file blobs so later reads do not require the token.
-8. OpenCode runs unattended in the Repository Checkout with its normal coding tools, including shell execution, workspace writes, and outbound network access, using the configured Bedrock model. It has no GitHub credential and cannot push workspace changes.
-9. Before creating the OpenCode session, the worker establishes the live event subscription. From session creation until the subscription is closed after prompt completion, each event delivered by that subscription is persisted to DynamoDB. Losing the subscription or failing to persist a delivered event fails the run.
-10. The worker extracts the textual response from OpenCode's final assistant message.
-11. After the prompt completes, the worker drains delivered events, closes the subscription, and cleanly stops the local OpenCode server.
-12. The worker stores a versioned archive of the entire per-run OpenCode data directory in S3. The archive includes a manifest with the archive format version, OpenCode version, and Agent Run ID, plus every data-directory file after shutdown, including the SQLite database and any full tool-output side files. The upload and checksum must be verified.
-13. Only after the complete Execution Record is verified does the worker atomically store the textual result and mark the run `succeeded`.
-14. If execution fails while the worker can still write, it stops OpenCode, preserves any partial Execution Record it can, stores a sanitized failure description, and marks the run `failed`. Abrupt termination may prevent any Execution Record from being stored.
+6. The queue worker reads the deployment's GitHub App credentials, resolves the selected Source Branch or repository default branch, and discovers open same-repository pull requests whose heads use the `fireclanker/` prefix. It offers the new-PR option plus existing pull requests explicitly referenced by the Agent Prompt or selected Source Branch.
+7. For a public Source Repository, the queue worker requests a clone without credentials. For a private Source Repository, it mints a short-lived, repository-scoped, Contents-read installation token and passes it separately from the Agent Prompt to the agent microVM.
+8. The microVM creates a shallow Repository Checkout of the selected Source Branch, or the repository default branch when none was selected, and fetches the exact commit for every offered Publication Option. Authentication is supplied only to these Git processes; it is absent from the clone URL and repository configuration and unavailable to OpenCode.
+9. Before editing, the coding agent selects one offered Publication Option. The harness discards any selection-phase workspace changes and resets the checkout to that option's exact head commit.
+10. OpenCode performs the task with its normal coding tools and no GitHub credential. Its structured completion contains the textual response and either a request to publish through the selected option or a decision not to publish.
+11. When publication is requested, the microVM captures at most 250 changed paths and 3 MiB of regular-file, executable-file, and symlink content relative to the selected head. Paths, modes, content, and total size are bounded again by the queue worker.
+12. The microVM returns the untrusted change set and terminates. The queue worker revokes the checkout token.
+13. The queue worker verifies that the Publication Decision names an option actually offered to this run, re-fetches its current GitHub state, and rejects an existing pull request whose head moved.
+14. The queue worker mints a new single-repository installation token with Contents and Pull requests write permissions. It creates Git blobs, a tree, and one commit through GitHub's Git database endpoints.
+15. A new-PR option creates `fireclanker/<agent-run-id>` and a draft pull request targeting the selected Source Branch or repository default branch. An existing-PR option fast-forwards its Fireclanker branch without force and does not create another pull request.
+16. The queue worker revokes the publication token, records the publication URL in the event feed and textual result, then marks the Agent Run `succeeded`.
+17. If execution or publication fails while the worker can still write, it stores a sanitized failure description and marks the run `failed`.
 
 The Repository Checkout and files created in the Run Workspace are ephemeral execution aids. They are not retained as results or retrievable artifacts. The Execution Record is operational data and has no MVP CLI retrieval command; it can be accessed through S3 and AWS tooling.
 
-GitHub credentials are transport secrets rather than Agent Run data. App private keys and installation tokens must never be stored in DynamoDB, included in an Agent Prompt or clone URL, intentionally exposed to OpenCode, or emitted in events, results, failure descriptions, and logs. Only the queue worker role may decrypt the deployment's GitHub App SSM parameter and mint installation tokens; the agent microVM execution role cannot. The agent microVM receives only the per-run installation token needed for checkout and removes its access to that token before OpenCode starts.
+GitHub credentials are transport secrets rather than Agent Run data. App private keys and installation tokens must never be stored in DynamoDB, included in an Agent Prompt or clone URL, intentionally exposed to OpenCode, or emitted in events, results, failure descriptions, and logs. Only the queue worker role may decrypt the deployment's GitHub App SSM parameter and mint installation tokens; the agent microVM execution role cannot. The microVM receives only the per-run read token needed for checkout, removes its access before OpenCode starts, and never receives the publication token.
 
 The DynamoDB Stream event source must filter for inserted records whose entity type is `AgentRun` and whose status is `queued`, and its batch size is one. Agent events and status updates written to the same table must not start another worker invocation.
 

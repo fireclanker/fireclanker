@@ -14,6 +14,11 @@ export class InvalidSourceRepository extends Schema.TaggedErrorClass<InvalidSour
   { cause: Schema.Defect() }
 ) { }
 
+export class InvalidSourceBranch extends Schema.TaggedErrorClass<InvalidSourceBranch>()(
+  "InvalidSourceBranch",
+  { cause: Schema.Defect() }
+) { }
+
 /**
   * @since
   * @category error

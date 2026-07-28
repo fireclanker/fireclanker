@@ -1,13 +1,33 @@
 import { Context, Effect, Redacted } from "effect"
-import type { SourceRepository } from "../../agent-job/agent-job.model.ts"
+import type {
+  SourceBranch,
+  SourceRepository
+} from "../../agent-job/agent-job.model.ts"
+import type { ChangeSet } from "../../publication/publication.model.ts"
 import type { RepositoryError } from "../error.ts"
 
 export interface RepositoryCheckoutRequest {
   readonly sourceRepository: SourceRepository
+  readonly sourceBranch?: SourceBranch
   readonly destination: string
+  readonly candidateBaseShas?: ReadonlyArray<string>
   readonly authentication?: {
     readonly token: Redacted.Redacted<string>
   }
+}
+
+export interface RepositoryCheckout {
+  readonly baseSha: string
+}
+
+export interface RepositoryChangesRequest {
+  readonly destination: string
+  readonly baseSha: string
+}
+
+export interface RepositoryResetRequest {
+  readonly destination: string
+  readonly baseSha: string
 }
 
 /**
@@ -21,6 +41,14 @@ export interface IRepository {
     */
   readonly checkout: (
     request: RepositoryCheckoutRequest
+  ) => Effect.Effect<RepositoryCheckout, RepositoryError>
+
+  readonly changes: (
+    request: RepositoryChangesRequest
+  ) => Effect.Effect<ChangeSet, RepositoryError>
+
+  readonly reset: (
+    request: RepositoryResetRequest
   ) => Effect.Effect<void, RepositoryError>
 }
 

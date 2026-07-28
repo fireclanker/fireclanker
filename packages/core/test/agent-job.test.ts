@@ -14,7 +14,9 @@ import {
   AgentJobRepository,
   AgentJobService,
   AgentJobServiceLive,
-  DynamoAgentJobRepository
+  DynamoAgentJobRepository,
+  parseSourceRepositoryArgument,
+  SourceRepositoryArgument
 } from "../src/agent-job/index.ts"
 
 const makeClient = () => {
@@ -40,7 +42,8 @@ describe("AgentJobService.queueJob", () => {
         const agentJob = yield* AgentJobService
         return yield* agentJob.queueJob({
           prompt: "  investigate the failure  ",
-          sourceRepository: "Fireclanker/example.repo"
+          sourceRepository: "Fireclanker/example.repo",
+          sourceBranch: "feature/explicit-start"
         })
       }).pipe(
         Effect.provide(layer)
@@ -50,6 +53,7 @@ describe("AgentJobService.queueJob", () => {
     expect(job.status).toBe("queued")
     expect(String(job.prompt)).toBe("  investigate the failure  ")
     expect(String(job.sourceRepository)).toBe("Fireclanker/example.repo")
+    expect(String(job.sourceBranch)).toBe("feature/explicit-start")
     expect(writes).toHaveLength(1)
     expect(writes[0]).toEqual({
       TableName: "fireclanker",
@@ -60,12 +64,23 @@ describe("AgentJobService.queueJob", () => {
         id: { S: job.id },
         prompt: { S: job.prompt },
         sourceRepository: { S: "Fireclanker/example.repo" },
+        sourceBranch: { S: "feature/explicit-start" },
         status: { S: "queued" },
         createdAt: { S: expect.any(String) },
         createdAtId: { S: expect.stringMatching(new RegExp(`#${job.id}$`)) }
       },
       ConditionExpression: "attribute_not_exists(PK) AND attribute_not_exists(SK)"
     })
+  })
+
+  test("parses an explicit Source Branch separately from the Source Repository", () => {
+    const input = Schema.decodeUnknownSync(SourceRepositoryArgument)(
+      "fireclanker/fireclanker@feature/branch@v2"
+    )
+
+    const parsed = parseSourceRepositoryArgument(input)
+    expect(String(parsed.sourceRepository)).toBe("fireclanker/fireclanker")
+    expect(String(parsed.sourceBranch)).toBe("feature/branch@v2")
   })
 
   test("rejects a whitespace-only prompt without writing", async () => {
@@ -111,6 +126,34 @@ describe("AgentJobService.queueJob", () => {
       )
 
       expect(error._tag).toBe("InvalidSourceRepository")
+      expect(writes).toHaveLength(0)
+    })
+  }
+
+  for (const sourceBranch of [
+    "",
+    "-dangerous",
+    "feature//nested",
+    "feature with spaces",
+    "feature.lock"
+  ]) {
+    test(`rejects invalid Source Branch ${JSON.stringify(sourceBranch)}`, async () => {
+      const { client, writes } = makeClient()
+      const layer = AgentJobServiceLive.pipe(
+        Layer.provide(DynamoAgentJobRepository({ tableName: "fireclanker", client }))
+      )
+      const error = await Effect.runPromise(
+        Effect.gen(function*() {
+          const agentJob = yield* AgentJobService
+          return yield* agentJob.queueJob({
+            prompt: "investigate",
+            sourceRepository: "fireclanker/example",
+            sourceBranch
+          }).pipe(Effect.flip)
+        }).pipe(Effect.provide(layer))
+      )
+
+      expect(error._tag).toBe("InvalidSourceBranch")
       expect(writes).toHaveLength(0)
     })
   }
@@ -190,6 +233,7 @@ describe("AgentJob lifecycle", () => {
               id: { S: id },
               prompt: { S: "hello" },
               sourceRepository: { S: "fireclanker/example" },
+              sourceBranch: { S: "release/next" },
               status: { S: "succeeded" },
               createdAt: { S: now },
               startedAt: { S: now },
@@ -242,6 +286,7 @@ describe("AgentJob lifecycle", () => {
 
     expect(result.job.status).toBe("succeeded")
     expect(String(result.job.sourceRepository)).toBe("fireclanker/example")
+    expect(String(result.job.sourceBranch)).toBe("release/next")
     expect(result.events.map((event) => event.message)).toEqual(["event 1", "event 2"])
     expect(queryCalls).toBe(2)
   })

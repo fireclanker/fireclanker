@@ -12,8 +12,8 @@ const watch = Flag.boolean("watch").pipe(
 )
 
 const repo = Flag.string("repo").pipe(
-  Flag.withSchema(AgentJob.SourceRepository),
-  Flag.withDescription("GitHub Source Repository in owner/name format")
+  Flag.withSchema(AgentJob.SourceRepositoryArgument),
+  Flag.withDescription("GitHub Source Repository in owner/name[@branch] format")
 )
 
 /**

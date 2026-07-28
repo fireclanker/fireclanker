@@ -1,12 +1,26 @@
 import { NodeServices } from "@effect/platform-node"
-import { AgentHarness, type AgentJob, Repository } from "@fireclanker/core"
+import {
+  AgentHarness,
+  type AgentJob,
+  type Publication,
+  Repository
+} from "@fireclanker/core"
 import * as AWS from "alchemy/AWS"
 import { Effect, Layer, Redacted } from "effect"
 import dockerfile from "./Dockerfile?raw" with { type: "text" }
+import type { AgentMicrovmError } from "./agent-microvm-response.ts"
 
-type AgentMicrovmError = {
-  readonly _tag: "AgentMicrovmError"
-  readonly operation: string
+const errorReason = (cause: unknown): string | undefined => {
+  if (cause instanceof Error) return `${cause.name}: ${cause.message}`.slice(0, 512)
+  if (
+    typeof cause === "object" &&
+    cause !== null &&
+    "message" in cause &&
+    typeof cause.message === "string"
+  ) {
+    return cause.message.slice(0, 512)
+  }
+  return undefined
 }
 
 export class AgentMicrovm extends AWS.Lambda.MicrovmImage<
@@ -15,9 +29,14 @@ export class AgentMicrovm extends AWS.Lambda.MicrovmImage<
     run: (request: {
       readonly prompt: string
       readonly sourceRepository: AgentJob.SourceRepository
+      readonly sourceBranch?: AgentJob.SourceBranch
+      readonly publicationOptions: ReadonlyArray<Publication.PublicationOption>
       readonly repositoryAccessToken?: string
     }) => Effect.Effect<{
       readonly result: string
+      readonly baseSha: string
+      readonly changes: Publication.ChangeSet
+      readonly publication: Publication.PublicationDecision
       readonly logs: ReadonlyArray<string>
     }, AgentMicrovmError>
   }
@@ -71,17 +90,26 @@ export const AgentMicrovmLive = AgentMicrovm.make(
     const agentHarness = yield* AgentHarness.AgentHarness
 
     return {
-      run: ({ prompt, sourceRepository, repositoryAccessToken }) =>
+      run: ({
+        prompt,
+        sourceRepository,
+        sourceBranch,
+        publicationOptions,
+        repositoryAccessToken
+      }) =>
         agentHarness.run({
           prompt,
           sourceRepository,
+          sourceBranch,
+          publicationOptions,
           repositoryAuthentication: repositoryAccessToken === undefined
             ? undefined
             : { token: Redacted.make(repositoryAccessToken) }
         }).pipe(
           Effect.mapError((cause): AgentMicrovmError => ({
             _tag: "AgentMicrovmError",
-            operation: cause.operation
+            operation: cause.operation,
+            reason: errorReason(cause.cause)
           }))
         )
     }

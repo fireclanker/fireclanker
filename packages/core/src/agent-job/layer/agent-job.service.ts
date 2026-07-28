@@ -4,6 +4,7 @@ import {
   AgentJobNotFound,
   AgentJobOperationError,
   InvalidAgentPrompt,
+  InvalidSourceBranch,
   InvalidSourceRepository,
   QueueJobError
 } from "../error.ts"
@@ -37,7 +38,18 @@ export const AgentJobServiceLive = Layer.effect(
       )(request.sourceRepository).pipe(
         Effect.mapError((cause) => new InvalidSourceRepository({ cause }))
       )
-      const { job, createdAtIso } = yield* AgentJobModel.make(prompt, sourceRepository)
+      const sourceBranch = request.sourceBranch === undefined
+        ? undefined
+        : yield* Schema.decodeUnknownEffect(AgentJobModel.SourceBranch)(
+          request.sourceBranch
+        ).pipe(
+          Effect.mapError((cause) => new InvalidSourceBranch({ cause }))
+        )
+      const { job, createdAtIso } = yield* AgentJobModel.make(
+        prompt,
+        sourceRepository,
+        sourceBranch
+      )
 
       yield* repository.put(job, createdAtIso).pipe(
         Effect.mapError((cause) => new QueueJobError({ cause }))

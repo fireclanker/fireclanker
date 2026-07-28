@@ -15,7 +15,10 @@ export const bedrockOpencodeConfig = (region: string): Record<string, unknown> =
   enabled_providers: [providerId],
   provider: {
     [providerId]: {
-      options: { region }
+      options: {
+        region,
+        timeout: 480_000
+      }
     }
   }
 })

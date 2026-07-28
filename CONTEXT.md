@@ -20,6 +20,10 @@ _Avoid_: Query, message, task
 The externally owned GitHub repository selected as source input for an Agent Run, identified by its canonical owner and repository name. The selection is immutable for the Agent Run even though the repository's contents may change.
 _Avoid_: Run Workspace, clone URL
 
+**Source Branch**:
+The immutable Git branch explicitly selected as the starting revision for an Agent Run. When no Source Branch is selected, the Source Repository's default branch supplies the starting revision.
+_Avoid_: Source Repository, clone ref
+
 **Trusted Prompt**:
 An Agent Prompt assumed not to intentionally misuse the coding agent's runtime permissions. Compute isolation does not make a hostile prompt trusted.
 _Avoid_: Safe prompt, sandboxed prompt
@@ -55,6 +59,18 @@ _Avoid_: Repository, artifact store
 **Repository Checkout**:
 The Source Repository content made available within a Run Workspace for one Agent Run. It is ephemeral execution state rather than a durable result.
 _Avoid_: Source Repository, artifact
+
+**Publication Option**:
+An authorized repository target the orchestrator offers to the coding agent for one Agent Run. It identifies either a new pull request or a relevant existing Fireclanker pull request without granting arbitrary repository write authority.
+_Avoid_: Branch permission, GitHub credential
+
+**Publication Decision**:
+The coding agent's choice to publish through one offered Publication Option or to leave its changes unpublished. The choice expresses intent and does not itself authorize a repository write.
+_Avoid_: Push command, permission
+
+**Repository Publication**:
+The commit and pull-request update created from an Agent Run's validated workspace changes after an authorized Publication Decision.
+_Avoid_: Agent Run Result, workspace artifact
 
 **Execution Record**:
 The durable record of the agent's messages, tool calls, and other activity during an Agent Run. It is complete for a succeeded Agent Run and may be partial or absent when the Agent Run fails.

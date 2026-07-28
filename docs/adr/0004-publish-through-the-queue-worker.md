@@ -1,0 +1,3 @@
+# Publish agent-selected changes through the queue worker
+
+The coding agent selects from run-scoped Publication Options, but the queue worker reauthorizes and performs every GitHub write using a fresh, single-repository installation token. GitHub write credentials never enter the agent microVM: the microVM returns a bounded untrusted change set, then terminates before the worker creates Git objects, fast-forwards a Fireclanker branch, and creates or reuses a pull request. This keeps the agent responsible for publication intent while preventing a generic MCP tool or `git push` credential from becoming an unrestricted confused deputy.

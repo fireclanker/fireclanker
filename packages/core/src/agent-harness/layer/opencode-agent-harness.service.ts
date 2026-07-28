@@ -26,10 +26,11 @@ export const OpenCodeAgentHarness = Layer.effect(
         })),
         Effect.tap(() => Effect.logInfo("OpenCode execution completed")),
         Effect.map((result) => ({
-          result,
+          ...result,
           logs: [
             "[microvm] Source Repository checkout completed",
-            "[microvm] OpenCode completed with Claude Sonnet 4.6 on Bedrock"
+            "[microvm] OpenCode completed with Claude Sonnet 4.6 on Bedrock",
+            `[microvm] Agent selected ${result.publication.kind}`
           ]
         }))
       )

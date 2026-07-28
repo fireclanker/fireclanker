@@ -35,7 +35,19 @@ test("run rejects repository URLs", async () => {
   ))
 
   expect(result.exitCode).not.toBe(0)
-  expect(result.text).toContain("Source Repository must use the GitHub owner/name format")
+  expect(result.text).toContain("Source Repository must use the GitHub owner/name[@branch] format")
+})
+
+test("run rejects an invalid explicit Source Branch", async () => {
+  const result = await output(runCli(
+    "run",
+    "--repo",
+    "fireclanker/example@feature//nested",
+    "inspect the repository"
+  ))
+
+  expect(result.exitCode).not.toBe(0)
+  expect(result.text).toContain("Source Branch must be a valid Git branch name")
 })
 
 test("run help describes the Source Repository option", async () => {
@@ -44,4 +56,5 @@ test("run help describes the Source Repository option", async () => {
   expect(result.exitCode).toBe(0)
   expect(result.text).toContain("--repo")
   expect(result.text).toContain("GitHub Source Repository")
+  expect(result.text).toContain("owner/name[@branch]")
 })

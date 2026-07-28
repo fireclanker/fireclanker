@@ -1,8 +1,9 @@
-import { AgentJob, GitHub } from "@fireclanker/core"
+import { AgentJob, GitHub, Publication } from "@fireclanker/core"
+import * as NodeHttpClient from "@effect/platform-node/NodeHttpClient"
 import * as AWS from "alchemy/AWS"
 import { Duration, Effect, Layer, Redacted, Schedule, Schema, Stream } from "effect"
-import * as FetchHttpClient from "effect/unstable/http/FetchHttpClient"
 import { AgentMicrovm, AgentMicrovmExecutionRole } from "./agent-microvm.ts"
+import { requireAgentMicrovmResponse } from "./agent-microvm-response.ts"
 import { failureDescription, failureDiagnostic } from "./agent-failure.ts"
 import { DEPLOYMENT_NAME, TABLE_NAME } from "./constants.ts"
 import {
@@ -23,7 +24,7 @@ export class QueueWorker extends AWS.Lambda.Function<QueueWorker>()(
   {
     main: import.meta.filename,
     architecture: "arm64",
-    timeout: Duration.minutes(5),
+    timeout: Duration.minutes(10),
     memorySize: 1024,
     env: { FIRECLANKER_NAME: TABLE_NAME }
   },
@@ -94,16 +95,29 @@ export class QueueWorker extends AWS.Lambda.Function<QueueWorker>()(
           return yield* Effect.fail(new Error("Agent job has no Source Repository"))
         }
         const sourceRepository = job.sourceRepository
+        const sourceBranch = job.sourceBranch
         const githubApp = yield* readGitHubAppCredentials(DEPLOYMENT_NAME)
-        const repositoryAccessToken = yield* Effect.gen(function*() {
+        const githubAccessLayer = GitHub.GitHubAppRepositoryAccess(githubApp)
+        const { publicationOptions, repositoryAccessToken } = yield* Effect.gen(function*() {
           const access = yield* GitHub.GitHubRepositoryAccess
-          return yield* access.checkoutToken(sourceRepository)
-        }).pipe(Effect.provide(GitHub.GitHubAppRepositoryAccess(githubApp)))
+          const repositoryAccessToken = yield* access.checkoutToken(sourceRepository)
+          const availableOptions = yield* access.publicationOptions(
+            sourceRepository,
+            id,
+            sourceBranch
+          )
+          const publicationOptions = Publication.offeredPublicationOptions(
+            job.prompt,
+            availableOptions,
+            sourceBranch
+          )
+          return { publicationOptions, repositoryAccessToken }
+        }).pipe(Effect.provide(githubAccessLayer))
         yield* append("[lambda] worker claimed job")
         yield* append("[lambda] starting agent microvm")
         const vm = yield* runMicrovm({
           executionRoleArn: yield* executionRoleArn,
-          maximumDurationInSeconds: 240
+          maximumDurationInSeconds: 540
         })
 
         const response = yield* Effect.gen(function*() {
@@ -117,7 +131,7 @@ export class QueueWorker extends AWS.Lambda.Function<QueueWorker>()(
 
           const { authToken } = yield* createAuthToken({
             microvmIdentifier: vm.microvmId,
-            expirationInMinutes: 5,
+            expirationInMinutes: 10,
             allowedPorts: [{ port: 8080 }]
           })
           const agent = yield* AWS.Lambda.connectMicrovm(AgentMicrovm, {
@@ -127,6 +141,8 @@ export class QueueWorker extends AWS.Lambda.Function<QueueWorker>()(
           return yield* agent.run({
             prompt: job.prompt,
             sourceRepository,
+            sourceBranch,
+            publicationOptions,
             repositoryAccessToken: repositoryAccessToken === undefined
               ? undefined
               : Redacted.value(repositoryAccessToken)
@@ -144,12 +160,43 @@ export class QueueWorker extends AWS.Lambda.Function<QueueWorker>()(
               )
             )
           ),
-          Effect.provide(FetchHttpClient.layer)
+          Effect.ensuring(
+            repositoryAccessToken === undefined
+              ? Effect.void
+              : Effect.gen(function*() {
+                const access = yield* GitHub.GitHubRepositoryAccess
+                yield* access.revokeToken(repositoryAccessToken)
+              }).pipe(Effect.provide(githubAccessLayer))
+          ),
+          Effect.provide(NodeHttpClient.layerUndici),
+          Effect.flatMap(requireAgentMicrovmResponse)
         )
 
         for (const message of response.logs) yield* append(message)
+        const publication = yield* Effect.gen(function*() {
+          const access = yield* GitHub.GitHubRepositoryAccess
+          return yield* access.publish({
+            sourceRepository,
+            sourceBranch,
+            jobId: id,
+            offeredOptionIds: publicationOptions.map((option) => option.id),
+            baseSha: response.baseSha,
+            changes: response.changes,
+            decision: response.publication
+          })
+        }).pipe(Effect.provide(githubAccessLayer))
+        if (publication !== undefined) {
+          yield* append(`[lambda] published ${publication.url}`)
+        } else {
+          yield* append("[lambda] agent chose not to publish")
+        }
         yield* append("[lambda] job finished")
-        yield* service.succeed(id, response.result)
+        yield* service.succeed(
+          id,
+          publication === undefined
+            ? response.result
+            : `${response.result}\n\nPublished: ${publication.url}`
+        )
         yield* Effect.logInfo("OpenCode job succeeded", { id })
       })
 

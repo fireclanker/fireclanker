@@ -24,6 +24,7 @@ test.skipIf(Bun.which("opencode") === null || process.env.FIRECLANKER_OPENCODE_I
       const agentHarness = yield* AgentHarness
       return yield* agentHarness.run({
         prompt: "Reply with exactly: hello from fireclanker",
+        publicationOptions: [],
         sourceRepository: Schema.decodeUnknownSync(SourceRepository)(
           "octocat/Hello-World"
         )
