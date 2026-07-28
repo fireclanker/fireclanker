@@ -1,6 +1,6 @@
 import { AgentHarness, AgentJob } from "@fireclanker/core"
 import { expect, test } from "bun:test"
-import { Effect, Schema, Stream } from "effect"
+import { Effect, Redacted, Schema, Stream } from "effect"
 import { makeAgentMicrovmCoordinator } from "../src/infra/agent-microvm-coordinator.ts"
 
 const result: AgentHarness.AgentHarnessRunResult = {
@@ -15,9 +15,11 @@ const result: AgentHarness.AgentHarnessRunResult = {
 
 test("starts one execution and replays sequenced events to later watchers", async () => {
   let runs = 0
+  let observedRequest: AgentHarness.AgentHarnessRunRequest | undefined
   const harness: AgentHarness.IAgentHarness = {
-    run: () => {
+    run: (request) => {
       runs++
+      observedRequest = request
       return Stream.make(
         { _tag: "log", message: "checkout completed" },
         { _tag: "completed", result }
@@ -30,7 +32,12 @@ test("starts one execution and replays sequenced events to later watchers", asyn
     sourceRepository: Schema.decodeUnknownSync(AgentJob.SourceRepository)(
       "fireclanker/example"
     ),
-    publicationOptions: []
+    publicationOptions: [],
+    openAIAccess: {
+      accessToken: "short-lived-token",
+      expiresAt: 2_000_000_000_000,
+      accountId: "account-123"
+    }
   }
 
   const [allEvents, tailEvents] = await Effect.runPromise(
@@ -46,6 +53,15 @@ test("starts one execution and replays sequenced events to later watchers", asyn
   )
 
   expect(runs).toBe(1)
+  expect(observedRequest?.modelAccess).toMatchObject({
+    kind: "openai-subscription",
+    expiresAt: 2_000_000_000_000,
+    accountId: "account-123"
+  })
+  expect(String(observedRequest?.modelAccess?.accessToken))
+    .not.toContain("short-lived-token")
+  expect(Redacted.value(observedRequest!.modelAccess!.accessToken))
+    .toBe("short-lived-token")
   expect(allEvents).toEqual([
     { _tag: "log", sequence: 1, message: "checkout completed" },
     { _tag: "completed", sequence: 2, result }

@@ -1,4 +1,4 @@
-import { Context, Stream } from "effect"
+import { Context, Redacted, Stream } from "effect"
 import type {
   SourceBranch,
   SourceRepository
@@ -11,12 +11,20 @@ import type {
 import type { RepositoryCheckoutRequest } from "../../repository/service/repository.service.ts"
 import { AgentHarnessError } from "../error.ts"
 
+export interface OpenAISubscriptionAccess {
+  readonly kind: "openai-subscription"
+  readonly accessToken: Redacted.Redacted<string>
+  readonly expiresAt: number
+  readonly accountId?: string
+}
+
 export interface AgentHarnessRunRequest {
   readonly prompt: string
   readonly sourceRepository: SourceRepository
   readonly sourceBranch?: SourceBranch
   readonly publicationOptions: ReadonlyArray<PublicationOption>
   readonly repositoryAuthentication?: RepositoryCheckoutRequest["authentication"]
+  readonly modelAccess?: OpenAISubscriptionAccess
 }
 
 export interface AgentHarnessRunResult {

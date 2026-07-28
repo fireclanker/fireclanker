@@ -8,6 +8,7 @@ import {
 import { runOpencode } from "./opencode/run.ts"
 
 export { BEDROCK_MODEL_ID } from "./opencode/bedrock.ts"
+export { OPENAI_MODEL_ID } from "./opencode/openai.ts"
 
 /**
   * @since

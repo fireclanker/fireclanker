@@ -2,6 +2,10 @@ import * as AWS from "alchemy/AWS"
 import * as RemovalPolicy from "alchemy/RemovalPolicy"
 import { Context, Effect, Layer, Result, Stream } from "effect"
 import { TABLE_NAME } from "./constants.ts"
+import {
+  queuedAgentRunMessage,
+  tableEventsQueueProps
+} from "./queue-serialization.ts"
 
 /**
  * The single DynamoDB table for all Fireclanker data.
@@ -58,9 +62,10 @@ export const FireclankerTable = Effect.gen(function*() {
   }).pipe(RemovalPolicy.retain())
 })
 
-export const TableEventsQueue = AWS.SQS.Queue("TableEventsQueue", {
-  visibilityTimeout: 360
-})
+export const TableEventsQueue = AWS.SQS.Queue(
+  "TableEventsQueue",
+  tableEventsQueueProps
+)
 
 const queuedJobId = (record: {
   readonly eventName?: string
@@ -107,7 +112,7 @@ export default TableEventsStream.make(
   },
   Effect.gen(function*() {
     const { table, queue } = yield* TableResources
-    const sink = yield* AWS.SQS.QueueSink(queue)
+    const sendMessage = yield* AWS.SQS.SendMessage(queue)
 
     yield* AWS.DynamoDB.consumeTableChanges(
       table,
@@ -122,23 +127,18 @@ export default TableEventsStream.make(
             const jobId = queuedJobId(record)
             return jobId === undefined ? Result.fail(undefined) : Result.succeed(jobId)
           }),
-          Stream.map((jobId) => JSON.stringify({
-            version: 1,
-            jobId
-          })),
-          Stream.run(sink),
+          Stream.runForEach((jobId) =>
+            sendMessage(queuedAgentRunMessage(jobId)).pipe(Effect.asVoid)
+          ),
           Effect.orDie
         )
     )
   }).pipe(
     Effect.provide(
-      Layer.provideMerge(
-        Layer.mergeAll(
-          AWS.Lambda.TableEventSource,
-          AWS.SQS.QueueSinkHttp,
-          TableResourcesLive
-        ),
-        AWS.SQS.SendMessageBatchHttp
+      Layer.mergeAll(
+        AWS.Lambda.TableEventSource,
+        AWS.SQS.SendMessageHttp,
+        TableResourcesLive
       )
     )
   )

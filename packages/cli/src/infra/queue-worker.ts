@@ -10,6 +10,10 @@ import {
   githubAppParameterName,
   readGitHubAppCredentials
 } from "./github-app-credentials.ts"
+import {
+  openAISubscriptionParameterName,
+  refreshOpenAISubscriptionAccess
+} from "./openai-subscription.ts"
 import { FireclankerTable, TableEventsQueue } from "./table.ts"
 
 const parseJobId = (body: string) => Effect.try({
@@ -69,6 +73,15 @@ export class QueueWorker extends AWS.Lambda.Function<QueueWorker>()(
           ]
         }]
       })
+      yield* host.bind`Allow(${host}, OpenAISubscriptionCredentials)`({
+        policyStatements: [{
+          Effect: "Allow",
+          Action: ["ssm:GetParameter", "ssm:PutParameter"],
+          Resource: [
+            `arn:aws:ssm:${region}:${accountId}:parameter${openAISubscriptionParameterName(DEPLOYMENT_NAME)}`
+          ]
+        }]
+      })
     }
 
     const agentJobLayer = AgentJob.AgentJobServiceLive.pipe(
@@ -113,7 +126,13 @@ export class QueueWorker extends AWS.Lambda.Function<QueueWorker>()(
           )
           return { publicationOptions, repositoryAccessToken }
         }).pipe(Effect.provide(githubAccessLayer))
+        const openAIAccess = yield* refreshOpenAISubscriptionAccess(
+          DEPLOYMENT_NAME
+        )
         yield* append("[lambda] worker claimed job")
+        yield* append(openAIAccess === undefined
+          ? "[lambda] using Claude Sonnet 4.6 on Bedrock"
+          : "[lambda] using GPT-5.6 Sol through ChatGPT subscription")
         yield* append("[lambda] starting agent microvm")
         const vm = yield* runMicrovm({
           executionRoleArn: yield* executionRoleArn,
@@ -145,7 +164,16 @@ export class QueueWorker extends AWS.Lambda.Function<QueueWorker>()(
             publicationOptions,
             repositoryAccessToken: repositoryAccessToken === undefined
               ? undefined
-              : Redacted.value(repositoryAccessToken)
+              : Redacted.value(repositoryAccessToken),
+            openAIAccess: openAIAccess === undefined
+              ? undefined
+              : {
+                  accessToken: Redacted.value(openAIAccess.accessToken),
+                  expiresAt: openAIAccess.expiresAt,
+                  ...(openAIAccess.accountId === undefined
+                    ? {}
+                    : { accountId: openAIAccess.accountId })
+                }
           })
           yield* service.attachMicrovm(id, {
             id: vm.microvmId,

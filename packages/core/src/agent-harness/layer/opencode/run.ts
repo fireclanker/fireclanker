@@ -2,22 +2,23 @@ import { mkdtemp, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { fromNodeProviderChain } from "@aws-sdk/credential-providers"
-import { Effect, JsonSchema, Schema } from "effect"
-import type {
-  SourceBranch,
-  SourceRepository
-} from "../../../agent-job/agent-job.model.ts"
+import { Effect, JsonSchema, Redacted, Schema } from "effect"
 import {
   AgentCompletion,
   type PublicationOption,
   PublicationTargetSelection
 } from "../../../publication/publication.model.ts"
-import {
-  Repository,
-  type RepositoryCheckoutRequest
-} from "../../../repository/service/repository.service.ts"
+import { Repository } from "../../../repository/service/repository.service.ts"
+import type {
+  AgentHarnessRunRequest,
+  OpenAISubscriptionAccess
+} from "../../service/agent-harness.service.ts"
 import { bedrockModel, bedrockOpencodeConfig } from "./bedrock.ts"
 import { makeOpenCode, OpenCodeError } from "./effect-sdk.ts"
+import { openAIModel, openAIOpencodeConfig } from "./openai.ts"
+
+const OPENAI_MINIMUM_ACCESS_LIFETIME_MS = 10 * 60 * 1000
+const UNAVAILABLE_REFRESH_TOKEN = "unavailable-in-agent-microvm"
 
 export const structuredOutputSchema = <A>(
   schema: Schema.Codec<A, unknown, never, never>
@@ -62,14 +63,9 @@ export const runOpencode = Effect.fn("OpenCode.run")(
     sourceRepository,
     sourceBranch,
     publicationOptions,
-    repositoryAuthentication
-  }: {
-    readonly prompt: string
-    readonly sourceRepository: SourceRepository
-    readonly sourceBranch?: SourceBranch
-    readonly publicationOptions: ReadonlyArray<PublicationOption>
-    readonly repositoryAuthentication?: RepositoryCheckoutRequest["authentication"]
-  }, emit: (message: string) => Effect.Effect<unknown>) {
+    repositoryAuthentication,
+    modelAccess
+  }: AgentHarnessRunRequest, emit: (message: string) => Effect.Effect<unknown>) {
     const repository = yield* Repository
     const root = yield* Effect.acquireRelease(
       Effect.tryPromise({
@@ -101,40 +97,15 @@ export const runOpencode = Effect.fn("OpenCode.run")(
     )
     yield* emit("[microvm] Source Repository checkout completed")
     repositoryAuthentication = undefined
-    const credentials = yield* Effect.tryPromise({
-      try: () => fromNodeProviderChain()(),
-      catch: (cause) => new OpenCodeError({ operation: "resolve-aws-credentials", cause })
-    })
-    const previousCredentials = {
-      accessKeyId: process.env.AWS_ACCESS_KEY_ID,
-      secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY,
-      sessionToken: process.env.AWS_SESSION_TOKEN
-    }
-    yield* Effect.sync(() => {
-      process.env.AWS_ACCESS_KEY_ID = credentials.accessKeyId
-      process.env.AWS_SECRET_ACCESS_KEY = credentials.secretAccessKey
-      if (credentials.sessionToken) process.env.AWS_SESSION_TOKEN = credentials.sessionToken
-      else delete process.env.AWS_SESSION_TOKEN
-    })
-    const opencode = yield* makeOpenCode({
-      hostname: "127.0.0.1",
-      port: 0,
-      timeout: 30_000,
-      config: bedrockOpencodeConfig(
-        process.env.AWS_REGION ?? process.env.AWS_DEFAULT_REGION ?? "us-east-1"
-      )
-    }).pipe(
-      Effect.ensuring(Effect.sync(() => {
-        restoreEnvironment("AWS_ACCESS_KEY_ID", previousCredentials.accessKeyId)
-        restoreEnvironment("AWS_SECRET_ACCESS_KEY", previousCredentials.secretAccessKey)
-        restoreEnvironment("AWS_SESSION_TOKEN", previousCredentials.sessionToken)
-      }))
-    )
+    const opencode = modelAccess === undefined
+      ? yield* makeBedrockOpenCode()
+      : yield* makeOpenAISubscriptionOpenCode(modelAccess)
+    const model = modelAccess === undefined ? bedrockModel : openAIModel
 
     const session = yield* opencode.session.create({
       directory: workspace,
       title: "Fireclanker run",
-      model: { providerID: bedrockModel.providerID, id: bedrockModel.modelID }
+      model: { providerID: model.providerID, id: model.modelID }
     })
     let selectedOption: PublicationOption | undefined
     let selectedBaseSha = checkout.baseSha
@@ -142,7 +113,7 @@ export const runOpencode = Effect.fn("OpenCode.run")(
       const selectionResponse = yield* opencode.session.prompt({
         sessionID: session.id,
         directory: workspace,
-        model: bedrockModel,
+        model,
         format: {
           type: "json_schema",
           schema: structuredOutputSchema(PublicationTargetSelection),
@@ -190,7 +161,7 @@ export const runOpencode = Effect.fn("OpenCode.run")(
     const response = yield* opencode.session.prompt({
       sessionID: session.id,
       directory: workspace,
-      model: bedrockModel,
+      model,
       format: {
         type: "json_schema",
         schema: structuredOutputSchema(AgentCompletion),
@@ -225,7 +196,9 @@ export const runOpencode = Effect.fn("OpenCode.run")(
         cause: new Error("Agent changed to an unavailable publication target")
       }))
     }
-    yield* emit("[microvm] OpenCode completed with Claude Sonnet 4.6 on Bedrock")
+    yield* emit(modelAccess === undefined
+      ? "[microvm] OpenCode completed with Claude Sonnet 4.6 on Bedrock"
+      : "[microvm] OpenCode completed with GPT-5.6 Sol through ChatGPT subscription")
     yield* emit(`[microvm] Agent selected ${completion.publication.kind}`)
     const changes = completion.publication.kind === "publish"
       ? yield* repository.changes({
@@ -247,6 +220,63 @@ export const runOpencode = Effect.fn("OpenCode.run")(
   },
   Effect.scoped
 )
+
+const makeBedrockOpenCode = () => Effect.gen(function*() {
+  const credentials = yield* Effect.tryPromise({
+    try: () => fromNodeProviderChain()(),
+    catch: (cause) => new OpenCodeError({ operation: "resolve-aws-credentials", cause })
+  })
+  const previousCredentials = {
+    accessKeyId: process.env.AWS_ACCESS_KEY_ID,
+    secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY,
+    sessionToken: process.env.AWS_SESSION_TOKEN
+  }
+  yield* Effect.sync(() => {
+    process.env.AWS_ACCESS_KEY_ID = credentials.accessKeyId
+    process.env.AWS_SECRET_ACCESS_KEY = credentials.secretAccessKey
+    if (credentials.sessionToken) process.env.AWS_SESSION_TOKEN = credentials.sessionToken
+    else delete process.env.AWS_SESSION_TOKEN
+  })
+  return yield* makeOpenCode({
+    hostname: "127.0.0.1",
+    port: 0,
+    timeout: 30_000,
+    config: bedrockOpencodeConfig(
+      process.env.AWS_REGION ?? process.env.AWS_DEFAULT_REGION ?? "us-east-1"
+    )
+  }).pipe(
+    Effect.ensuring(Effect.sync(() => {
+      restoreEnvironment("AWS_ACCESS_KEY_ID", previousCredentials.accessKeyId)
+      restoreEnvironment("AWS_SECRET_ACCESS_KEY", previousCredentials.secretAccessKey)
+      restoreEnvironment("AWS_SESSION_TOKEN", previousCredentials.sessionToken)
+    }))
+  )
+})
+
+const makeOpenAISubscriptionOpenCode = (
+  access: OpenAISubscriptionAccess
+) => Effect.gen(function*() {
+  if (access.expiresAt < Date.now() + OPENAI_MINIMUM_ACCESS_LIFETIME_MS) {
+    return yield* Effect.fail(new OpenCodeError({
+      operation: "validate-openai-access-token",
+      cause: new Error("OpenAI access token expires too soon for a remote run")
+    }))
+  }
+  const opencode = yield* makeOpenCode({
+    hostname: "127.0.0.1",
+    port: 0,
+    timeout: 30_000,
+    config: openAIOpencodeConfig()
+  })
+  yield* opencode.auth.set("openai", {
+    type: "oauth",
+    refresh: UNAVAILABLE_REFRESH_TOKEN,
+    access: Redacted.value(access.accessToken),
+    expires: access.expiresAt,
+    ...(access.accountId === undefined ? {} : { accountId: access.accountId })
+  })
+  return opencode
+})
 
 const restoreEnvironment = (key: string, value: string | undefined): void => {
   if (value === undefined) delete process.env[key]

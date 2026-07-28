@@ -101,7 +101,17 @@ export const makeAgentMicrovmCoordinator = (
       publicationOptions: request.publicationOptions,
       repositoryAuthentication: request.repositoryAccessToken === undefined
         ? undefined
-        : { token: Redacted.make(request.repositoryAccessToken) }
+        : { token: Redacted.make(request.repositoryAccessToken) },
+      modelAccess: request.openAIAccess === undefined
+        ? undefined
+        : {
+            kind: "openai-subscription",
+            accessToken: Redacted.make(request.openAIAccess.accessToken),
+            expiresAt: request.openAIAccess.expiresAt,
+            ...(request.openAIAccess.accountId === undefined
+              ? {}
+              : { accountId: request.openAIAccess.accountId })
+          }
     }).pipe(
       Stream.runForEach((event) =>
         publish({ ...event, sequence: ++sequence })

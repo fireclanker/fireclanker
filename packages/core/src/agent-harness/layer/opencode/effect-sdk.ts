@@ -2,6 +2,7 @@ import {
   createOpencodeClient,
   createOpencodeServer
 } from "@opencode-ai/sdk/v2"
+import type { Auth } from "@opencode-ai/sdk/v2"
 import { Effect, Schema } from "effect"
 import * as Http from "node:http"
 
@@ -54,6 +55,12 @@ export type OpenCodeSessionPromptInput = {
 type OpenCodeSdk = {
   readonly server: { readonly close: () => void }
   readonly client: {
+    readonly auth: {
+      readonly set: (
+        parameters: { readonly providerID: string; readonly auth: Auth },
+        options: { readonly throwOnError: true; readonly signal: AbortSignal }
+      ) => Promise<{ readonly data: boolean }>
+    }
     readonly session: {
       readonly create: (
         parameters: OpenCodeSessionCreateInput,
@@ -79,6 +86,12 @@ type CreateOpencode = (options: {
 }) => Promise<OpenCodeSdk>
 
 export type OpenCode = {
+  readonly auth: {
+    readonly set: (
+      providerID: string,
+      auth: Auth
+    ) => Effect.Effect<void, OpenCodeError>
+  }
   readonly session: {
     readonly create: (
       input: OpenCodeSessionCreateInput
@@ -160,6 +173,15 @@ export const makeOpenCode = (options: {
   { interruptible: true }
 ).pipe(
   Effect.map((opencode): OpenCode => ({
+    auth: {
+      set: (providerID, auth) => Effect.tryPromise({
+        try: (signal) => opencode.client.auth.set(
+          { providerID, auth },
+          { throwOnError: true, signal }
+        ),
+        catch: (cause) => new OpenCodeError({ operation: "set-authentication", cause })
+      }).pipe(Effect.asVoid)
+    },
     session: {
       create: (input) => Effect.tryPromise({
         try: (signal) => opencode.client.session.create(

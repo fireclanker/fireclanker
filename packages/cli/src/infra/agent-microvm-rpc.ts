@@ -9,6 +9,11 @@ export interface AgentMicrovmRunRequest {
   readonly sourceBranch?: AgentJob.SourceBranch
   readonly publicationOptions: ReadonlyArray<Publication.PublicationOption>
   readonly repositoryAccessToken?: string
+  readonly openAIAccess?: {
+    readonly accessToken: string
+    readonly expiresAt: number
+    readonly accountId?: string
+  }
 }
 
 export type AgentMicrovmEvent =

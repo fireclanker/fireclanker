@@ -9,12 +9,14 @@ AWS Lambda's managed Firecracker microVM is the sandbox boundary. fireclanker do
 - Effect for application code and the CLI: `@.agents/references/effect-smol/`
 - Alchemy for embedded infrastructure: `@.agents/references/alchemy/`
 - OpenCode SDK for the coding agent: `@.agents/references/opencode/`
-- AWS Bedrock with model ID `global.anthropic.claude-sonnet-4-6`
+- OpenAI GPT-5.6 Sol through an operator-configured ChatGPT subscription, with
+  AWS Bedrock model `global.anthropic.claude-sonnet-4-6` as the fallback
 - AWS Lambda for agent execution
 - DynamoDB for run state, results
 - S3 for Execution Records: complete versioned OpenCode data archives for succeeded runs and best-effort partial archives for failed runs
 - GitHub Apps for short-lived access to private Source Repositories
-- AWS Systems Manager Parameter Store for the GitHub App credentials
+- AWS Systems Manager Parameter Store for the GitHub App credentials and
+  optional OpenAI subscription credential
 
 ## MVP scope
 
@@ -60,6 +62,20 @@ For an SSO profile, authenticate it before deploying:
 aws sso login --profile sandbox-us
 fireclanker deploy
 ```
+
+To use the local OpenCode ChatGPT subscription for remote runs, authenticate
+OpenCode and copy only its OpenAI OAuth credential into the deployment's SSM
+`SecureString`:
+
+```sh
+opencode providers login --provider openai
+fireclanker auth
+fireclanker deploy
+```
+
+See [Remote OpenAI subscription authentication](openai-subscription.md) for the
+credential lifecycle and security model. Without that SSM parameter, remote
+runs continue to use Bedrock.
 
 The configured AWS account, region, and deployment name identify a deployment; deploying the same tuple again updates that deployment. Commands use the configured `name`, `region`, and `awsProfile` to locate it. The GitHub organization owns a private GitHub App dedicated to that deployment.
 
@@ -200,22 +216,31 @@ CLI -> DynamoDB -> DynamoDB Stream -> Worker Lambda -> DynamoDB
 4. The worker conditionally changes the status from `queued` to `running`.
 5. The worker prepares a fresh isolated Run Workspace and OpenCode data directory.
 6. The queue worker reads the deployment's GitHub App credentials, resolves the selected Source Branch or repository default branch, and discovers open same-repository pull requests whose heads use the `fireclanker/` prefix. It offers the new-PR option plus existing pull requests explicitly referenced by the Agent Prompt or selected Source Branch.
-7. For a public Source Repository, the queue worker requests a clone without credentials. For a private Source Repository, it mints a short-lived, repository-scoped, Contents-read installation token and passes it separately from the Agent Prompt to the agent microVM.
-8. The microVM creates a shallow Repository Checkout of the selected Source Branch, or the repository default branch when none was selected, and fetches the exact commit for every offered Publication Option. Authentication is supplied only to these Git processes; it is absent from the clone URL and repository configuration and unavailable to OpenCode.
-9. Before editing, the coding agent selects one offered Publication Option. The harness discards any selection-phase workspace changes and resets the checkout to that option's exact head commit.
-10. The queue worker records the running microVM's non-secret identifier, endpoint, and current persisted-event sequence on the Agent Run. An attached CLI mints a short-lived token directly from AWS and subscribes after the corresponding microVM sequence.
-11. OpenCode performs the task with its normal coding tools and no GitHub credential. The microVM emits ordered, replayable events to both the queue worker and any attached CLI. The worker persists bounded log events as the durable fallback; the CLI displays the live copy and advances its persisted-event cursor so those copies are not printed twice.
-12. OpenCode's structured completion contains the textual response and either a request to publish through the selected option or a decision not to publish. When publication is requested, the microVM captures at most 250 changed paths and 3 MiB of regular-file, executable-file, and symlink content relative to the selected head. Paths, modes, content, and total size are bounded again by the queue worker.
-13. The microVM emits one terminal completion event containing the textual response and untrusted change set. The CLI prints that response directly. The queue worker consumes the same event, terminates the microVM, and revokes the checkout token. The CLI then returns to DynamoDB because publication happens after microVM termination; the persisted terminal response is used as fallback and is not printed again after successful direct delivery.
-14. The queue worker verifies that the Publication Decision names an option actually offered to this run, re-fetches its current GitHub state, and rejects an existing pull request whose head moved.
-15. The queue worker mints a new single-repository installation token with Contents and Pull requests write permissions. It creates Git blobs, a tree, and one commit through GitHub's Git database endpoints.
-16. A new-PR option creates `fireclanker/<agent-run-id>` and a draft pull request targeting the selected Source Branch or repository default branch. An existing-PR option fast-forwards its Fireclanker branch without force and does not create another pull request.
-17. The queue worker revokes the publication token, records the publication URL in the event feed and textual result, then marks the Agent Run `succeeded`.
-18. If execution or publication fails while the worker can still write, it stores a sanitized failure description and marks the run `failed`.
+7. When the deployment has an OpenAI subscription parameter, the serialized
+   queue worker refreshes and rotates it in SSM, then passes only the
+   short-lived access token to the agent microVM. Otherwise the run uses the
+   microVM's Bedrock role.
+8. For a public Source Repository, the queue worker requests a clone without credentials. For a private Source Repository, it mints a short-lived, repository-scoped, Contents-read installation token and passes it separately from the Agent Prompt to the agent microVM.
+9. The microVM creates a shallow Repository Checkout of the selected Source Branch, or the repository default branch when none was selected, and fetches the exact commit for every offered Publication Option. Authentication is supplied only to these Git processes; it is absent from the clone URL and repository configuration and unavailable to OpenCode.
+10. Before editing, the coding agent selects one offered Publication Option. The harness discards any selection-phase workspace changes and resets the checkout to that option's exact head commit.
+11. The queue worker records the running microVM's non-secret identifier, endpoint, and current persisted-event sequence on the Agent Run. An attached CLI mints a short-lived token directly from AWS and subscribes after the corresponding microVM sequence.
+12. OpenCode performs the task with its normal coding tools and no GitHub credential. It uses GPT-5.6 Sol through the short-lived ChatGPT access token when configured, or Claude Sonnet 4.6 through Bedrock otherwise. The microVM emits ordered, replayable events to both the queue worker and any attached CLI. The worker persists bounded log events as the durable fallback; the CLI displays the live copy and advances its persisted-event cursor so those copies are not printed twice.
+13. OpenCode's structured completion contains the textual response and either a request to publish through the selected option or a decision not to publish. When publication is requested, the microVM captures at most 250 changed paths and 3 MiB of regular-file, executable-file, and symlink content relative to the selected head. Paths, modes, content, and total size are bounded again by the queue worker.
+14. The microVM emits one terminal completion event containing the textual response and untrusted change set. The CLI prints that response directly. The queue worker consumes the same event, terminates the microVM, and revokes the checkout token. The CLI then returns to DynamoDB because publication happens after microVM termination; the persisted terminal response is used as fallback and is not printed again after successful direct delivery.
+15. The queue worker verifies that the Publication Decision names an option actually offered to this run, re-fetches its current GitHub state, and rejects an existing pull request whose head moved.
+16. The queue worker mints a new single-repository installation token with Contents and Pull requests write permissions. It creates Git blobs, a tree, and one commit through GitHub's Git database endpoints.
+17. A new-PR option creates `fireclanker/<agent-run-id>` and a draft pull request targeting the selected Source Branch or repository default branch. An existing-PR option fast-forwards its Fireclanker branch without force and does not create another pull request.
+18. The queue worker revokes the publication token, records the publication URL in the event feed and textual result, then marks the Agent Run `succeeded`.
+19. If execution or publication fails while the worker can still write, it stores a sanitized failure description and marks the run `failed`.
 
 The Repository Checkout and files created in the Run Workspace are ephemeral execution aids. They are not retained as results or retrievable artifacts. The Execution Record is operational data and has no MVP CLI retrieval command; it can be accessed through S3 and AWS tooling.
 
 GitHub credentials are transport secrets rather than Agent Run data. App private keys and installation tokens must never be stored in DynamoDB, included in an Agent Prompt or clone URL, intentionally exposed to OpenCode, or emitted in events, results, failure descriptions, and logs. Only the queue worker role may decrypt the deployment's GitHub App SSM parameter and mint installation tokens; the agent microVM execution role cannot. The microVM receives only the per-run read token needed for checkout, removes its access before OpenCode starts, and never receives the publication token.
+
+The OpenAI OAuth refresh token is also a transport secret. Only the serialized
+queue worker may decrypt and rotate it. The agent microVM receives a fresh
+short-lived access token but never the refresh token. Neither token is stored
+in DynamoDB or included in prompts, logs, results, or execution events.
 
 The DynamoDB Stream event source must filter for inserted records whose entity type is `AgentRun` and whose status is `queued`, and its batch size is one. Agent events and status updates written to the same table must not start another worker invocation.
 
